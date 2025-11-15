@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>CAS Server API Documentation</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+</head>
+<body>
+    <div id="swagger-ui"></div>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+        window.onload = async () => {
+            try {
+                const response = await fetch('/swagger.yml');
+                const spec = await response.text();
+
+                window.ui = SwaggerUIBundle({
+                    spec: jsyaml.load(spec),
+                    dom_id: '#swagger-ui',
+                    deepLinking: true,
+                    presets: [
+                        SwaggerUIBundle.presets.apis,
+                        SwaggerUIBundle.SwaggerUIStandalonePreset
+                    ],
+                    layout: "BaseLayout"
+                });
+            } catch (error) {
+                console.error('Failed to load OpenAPI specification:', error);
+                document.getElementById('swagger-ui').innerHTML =
+                    '<div style="padding: 20px; color: red;">Failed to load API documentation. Please ensure swagger.yml is accessible.</div>';
+            }
+        };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/js-yaml@4/dist/js-yaml.min.js"></script>
+</body>
+</html>

@@ -1,0 +1,196 @@
+openapi: 3.0.0
+info:
+  title: Content Addressable Storage (CAS) Server API
+  description: A file storage server that stores and retrieves files based on their SHA256 hash
+  version: 1.0.0
+servers:
+  - url: /
+    description: Current server
+paths:
+  /file/upload:
+    post:
+      summary: Upload a file to CAS storage
+      description: Uploads a file and stores it using its SHA256 hash. Returns conflict if file already exists.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The file to upload
+              required:
+                - file
+      responses:
+        '200':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hash:
+                    type: string
+                    description: SHA256 hash of the uploaded file
+                    example: "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+        '400':
+          description: Bad request - file parameter is missing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "file parameter is required"
+        '409':
+          description: Conflict - file already exists
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "file already exists"
+                  hash:
+                    type: string
+                    description: SHA256 hash of the existing file
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /file/{hash}/download:
+    get:
+      summary: Download a file from CAS storage
+      description: Downloads a file by its SHA256 hash
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          description: SHA256 hash of the file (64 hexadecimal characters)
+          schema:
+            type: string
+            pattern: '^[a-f0-9]{64}$'
+            example: "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+      responses:
+        '200':
+          description: File content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Bad request - invalid hash format
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "invalid hash format"
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "file not found"
+  /file/{hash}/info:
+    get:
+      summary: Get file metadata
+      description: Returns metadata about a stored file including size and creation time
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          description: SHA256 hash of the file (64 hexadecimal characters)
+          schema:
+            type: string
+            pattern: '^[a-f0-9]{64}$'
+            example: "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+      responses:
+        '200':
+          description: File metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  hash:
+                    type: string
+                    description: SHA256 hash of the file
+                    example: "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+                  size:
+                    type: integer
+                    description: File size in bytes
+                    example: 1024
+                  created_at:
+                    type: string
+                    format: date-time
+                    description: File creation/modification time in RFC3339 format
+                    example: "2025-11-15T12:00:00Z"
+        '400':
+          description: Bad request - invalid hash format
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "invalid hash format"
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "file not found"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "failed to get file info"
+components:
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+    FileInfo:
+      type: object
+      properties:
+        hash:
+          type: string
+          description: SHA256 hash of the file
+        size:
+          type: integer
+          description: File size in bytes
+        created_at:
+          type: string
+          format: date-time
+          description: File creation time
