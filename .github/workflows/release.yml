@@ -55,9 +55,6 @@ jobs:
         # macOS ARM64 (M1/M2)
         GOOS=darwin GOARCH=arm64 go build -o build/casd-darwin-arm64 cmd/casd/*.go
 
-        # Windows AMD64
-        GOOS=windows GOARCH=amd64 go build -o build/casd-windows-amd64.exe cmd/casd/*.go
-
     - name: Create release archives
       run: |
         cd build
@@ -67,9 +64,6 @@ jobs:
         tar -czf casd-linux-arm64.tar.gz casd-linux-arm64
         tar -czf casd-darwin-amd64.tar.gz casd-darwin-amd64
         tar -czf casd-darwin-arm64.tar.gz casd-darwin-arm64
-
-        # Create zip archive for Windows
-        zip casd-windows-amd64.zip casd-windows-amd64.exe
 
     - name: Generate checksums
       run: |
@@ -96,7 +90,6 @@ jobs:
         - **Linux (ARM64)**: casd-linux-arm64.tar.gz
         - **macOS (Intel)**: casd-darwin-amd64.tar.gz
         - **macOS (Apple Silicon)**: casd-darwin-arm64.tar.gz
-        - **Windows (x86_64)**: casd-windows-amd64.zip
 
         ## Installation
         1. Download the appropriate archive for your platform
@@ -161,16 +154,6 @@ jobs:
         asset_path: build/casd-darwin-arm64.tar.gz
         asset_name: casd-darwin-arm64.tar.gz
         asset_content_type: application/gzip
-
-    - name: Upload Windows AMD64 Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: build/casd-windows-amd64.zip
-        asset_name: casd-windows-amd64.zip
-        asset_content_type: application/zip
 
     - name: Upload Checksums
       uses: actions/upload-release-asset@v1
