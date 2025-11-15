@@ -17,6 +17,7 @@ import (
 
 const (
 	minHashLength = 4
+	minHashSubDir = 8 // Minimum length for subdirectory structure (4 for loop + 4 for subdirs)
 	hashLength    = 64
 	dirPerm       = 0750
 	blockSize     = "1M"
@@ -179,7 +180,7 @@ func (s *Store) Upload(reader io.Reader, filename string) (*store.UploadResult, 
 	return &store.UploadResult{Hash: hash}, nil
 }
 
-// Download retrieves a file by its hash and returns the file path.
+// Download retrieves a file by its hash and returns a temporary file path.
 func (s *Store) Download(hash string) (string, error) {
 	hash = strings.ToLower(hash)
 	if !s.ValidateHash(hash) {
@@ -196,17 +197,48 @@ func (s *Store) Download(hash string) (string, error) {
 		return "", err
 	}
 
-	var filePath string
+	var tempFilePath string
 	err := s.withMountedLoop(hash, func() error {
-		filePath = s.getFilePath(hash)
-		if _, err := os.Stat(filePath); os.IsNotExist(err) {
-			log.Info().Str("hash", hash).Str("file_path", filePath).Msg("File not found")
-			return store.FileNotFoundError{Hash: hash}
-		} else if err != nil {
+		filePath, err := s.findFileInLoop(hash)
+		if err != nil {
+			log.Info().Str("hash", hash).Msg("File not found in loop")
 			return err
 		}
 
-		log.Info().Str("hash", hash).Str("file_path", filePath).Msg("File found for download")
+		// Create a temporary file to copy the content
+		tempFile, err := os.CreateTemp("", "cas-download-*")
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to create temporary file for download")
+			return err
+		}
+		defer func() {
+			if err := tempFile.Close(); err != nil {
+				log.Error().Err(err).Msg("Failed to close temporary download file")
+			}
+		}()
+
+		// Copy file content to temporary file
+		srcFile, err := os.Open(filePath) //nolint:gosec // filePath is constructed from validated hash, not user input
+		if err != nil {
+			log.Error().Err(err).Str("source_file", filePath).Msg("Failed to open source file for download")
+			return err
+		}
+		defer func() {
+			if err := srcFile.Close(); err != nil {
+				log.Error().Err(err).Msg("Failed to close source file")
+			}
+		}()
+
+		if _, err := io.Copy(tempFile, srcFile); err != nil {
+			log.Error().Err(err).Msg("Failed to copy file for download")
+			if removeErr := os.Remove(tempFile.Name()); removeErr != nil {
+				log.Error().Err(removeErr).Str("temp_file", tempFile.Name()).Msg("Failed to remove temporary file after copy error")
+			}
+			return err
+		}
+
+		tempFilePath = tempFile.Name()
+		log.Info().Str("hash", hash).Str("temp_file", tempFilePath).Msg("File copied for download")
 		return nil
 	})
 
@@ -214,7 +246,7 @@ func (s *Store) Download(hash string) (string, error) {
 		return "", err
 	}
 
-	return filePath, nil
+	return tempFilePath, nil
 }
 
 // GetFileInfo retrieves metadata about a stored file.
@@ -236,12 +268,13 @@ func (s *Store) GetFileInfo(hash string) (*store.FileInfo, error) {
 
 	var fileInfo *store.FileInfo
 	err := s.withMountedLoop(hash, func() error {
-		filePath := s.getFilePath(hash)
-		osFileInfo, err := os.Stat(filePath)
-		if os.IsNotExist(err) {
-			log.Info().Str("hash", hash).Str("file_path", filePath).Msg("File not found")
-			return store.FileNotFoundError{Hash: hash}
+		filePath, err := s.findFileInLoop(hash)
+		if err != nil {
+			log.Info().Str("hash", hash).Msg("File not found in loop")
+			return err
 		}
+
+		osFileInfo, err := os.Stat(filePath)
 		if err != nil {
 			log.Error().Err(err).Str("file_path", filePath).Msg("Failed to get file info")
 			return err
@@ -284,7 +317,7 @@ func (s *Store) getMountPoint(hash string) string {
 	// Create mount point based on hash prefix: data/loop00/01
 	dir1 := hash[:2]
 	dir2 := hash[2:4]
-	return filepath.Join(s.storageDir, dir1, dir2)
+	return filepath.Join(s.storageDir, fmt.Sprintf("loop%s", dir1), dir2)
 }
 
 // getFilePath returns the file path within the mounted loop filesystem with hierarchical structure.
@@ -293,12 +326,42 @@ func (s *Store) getFilePath(hash string) string {
 		return ""
 	}
 	mountPoint := s.getMountPoint(hash)
-	// Create hierarchical path within mount: data/loop00/01/02/03/fullhash
+	// Create hierarchical path within mount: mountpoint/02/03/04050607...
+	// First 4 chars (00/01) are used for loop file path, remaining chars go inside
+	if len(hash) < minHashSubDir {
+		return ""
+	}
 	subDir1 := hash[4:6]
 	subDir2 := hash[6:8]
 	subDir := filepath.Join(subDir1, subDir2)
-	// Use the full hash as the filename to ensure correct identification
-	return filepath.Join(mountPoint, subDir, hash)
+	// Use remaining hash chars (after first 8: 4 for loop path + 4 for subdirs) as filename
+	remainingHash := hash[8:]
+	return filepath.Join(mountPoint, subDir, remainingHash)
+}
+
+// findFileInLoop searches for a file in the mounted loop filesystem and returns the actual file path.
+// This is needed for download since we need to verify the file exists with the truncated name.
+func (s *Store) findFileInLoop(hash string) (string, error) {
+	if len(hash) < minHashSubDir {
+		return "", store.InvalidHashError{Hash: hash}
+	}
+
+	mountPoint := s.getMountPoint(hash)
+	subDir1 := hash[4:6]
+	subDir2 := hash[6:8]
+	subDir := filepath.Join(mountPoint, subDir1, subDir2)
+
+	// The filename should be the remaining hash (after first 8 chars: 4 for loop path + 4 for subdirs)
+	expectedFilename := hash[8:]
+	filePath := filepath.Join(subDir, expectedFilename)
+
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		return "", store.FileNotFoundError{Hash: hash}
+	} else if err != nil {
+		return "", err
+	}
+
+	return filePath, nil
 }
 
 // createLoopFile creates a new loop file and formats it with ext4.

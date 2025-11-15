@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"os"
 
 	"loopfs/pkg/log"
 	"loopfs/pkg/store"
@@ -35,5 +36,15 @@ func (cas *CASServer) downloadFile(ctx echo.Context) error {
 	}
 
 	log.Info().Str("hash", hash).Str("file_path", filePath).Msg("Serving file download")
+
+	// Schedule cleanup of temporary file after serving
+	defer func() {
+		if err := os.Remove(filePath); err != nil {
+			log.Error().Err(err).Str("temp_file", filePath).Msg("Failed to cleanup temporary download file")
+		} else {
+			log.Debug().Str("temp_file", filePath).Msg("Cleaned up temporary download file")
+		}
+	}()
+
 	return ctx.File(filePath)
 }

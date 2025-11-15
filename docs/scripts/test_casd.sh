@@ -94,7 +94,7 @@ if [[ $? -eq 0 ]]; then
         echo -e "${GREEN}✓ Download successful - files match${NC}"
     else
         echo -e "${RED}✗ Download successful but files don't match${NC}"
-       # rm -f "${TEST_FILE}" "${DOWNLOAD_FILE}"
+        rm -f "${TEST_FILE}" "${DOWNLOAD_FILE}"
         exit 1
     fi
     rm -f "${DOWNLOAD_FILE}"
