@@ -12,6 +12,13 @@ type FileInfo struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// DiskUsage represents disk space information.
+type DiskUsage struct {
+	SpaceUsed      int64 `json:"space_used"`      // Bytes used
+	SpaceAvailable int64 `json:"space_available"` // Bytes available
+	TotalSpace     int64 `json:"total_space"`     // Total bytes
+}
+
 // UploadResult represents the result of an upload operation.
 type UploadResult struct {
 	Hash string `json:"hash"`
@@ -40,6 +47,10 @@ type Store interface {
 	// Delete removes a file with the given hash from storage.
 	// Returns an error if the file doesn't exist or hash is invalid.
 	Delete(hash string) error
+
+	// GetDiskUsage returns disk space information for a specific file's loop filesystem.
+	// Returns an error if the file doesn't exist or hash is invalid.
+	GetDiskUsage(hash string) (*DiskUsage, error)
 }
 
 // FileExistsError is returned when trying to upload a file that already exists.

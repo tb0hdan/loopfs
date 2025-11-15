@@ -35,9 +35,23 @@ func (cas *CASServer) getFileInfo(ctx echo.Context) error {
 		})
 	}
 
+	// Get disk usage information for this specific file's loop filesystem
+	diskUsage, err := cas.store.GetDiskUsage(hash)
+	if err != nil {
+		log.Error().Err(err).Str("hash", hash).Msg("Failed to get disk usage")
+		// Return file info without disk usage if it fails
+		return ctx.JSON(http.StatusOK, map[string]interface{}{
+			"hash":       fileInfo.Hash,
+			"size":       fileInfo.Size,
+			"created_at": fileInfo.CreatedAt.Format(time.RFC3339),
+		})
+	}
+
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"hash":       fileInfo.Hash,
-		"size":       fileInfo.Size,
-		"created_at": fileInfo.CreatedAt.Format(time.RFC3339),
+		"hash":            fileInfo.Hash,
+		"size":            fileInfo.Size,
+		"created_at":      fileInfo.CreatedAt.Format(time.RFC3339),
+		"space_used":      diskUsage.SpaceUsed,
+		"space_available": diskUsage.SpaceAvailable,
 	})
 }

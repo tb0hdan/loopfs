@@ -112,7 +112,7 @@ paths:
   /file/{hash}/info:
     get:
       summary: Get file metadata
-      description: Returns metadata about a stored file including size and creation time
+      description: Returns metadata about a stored file including size, creation time, and disk usage of its loop filesystem
       parameters:
         - name: hash
           in: path
@@ -143,6 +143,14 @@ paths:
                     format: date-time
                     description: File creation/modification time in RFC3339 format
                     example: "2025-11-15T12:00:00Z"
+                  space_used:
+                    type: integer
+                    description: Space used in the file's loop filesystem (bytes)
+                    example: 1073741824
+                  space_available:
+                    type: integer
+                    description: Space available in the file's loop filesystem (bytes)
+                    example: 10737418240
         '400':
           description: Bad request - invalid hash format
           content:
@@ -253,3 +261,9 @@ components:
           type: string
           format: date-time
           description: File creation time
+        space_used:
+          type: integer
+          description: Space used in the file's loop filesystem (bytes)
+        space_available:
+          type: integer
+          description: Space available in the file's loop filesystem (bytes)

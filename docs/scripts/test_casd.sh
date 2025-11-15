@@ -75,7 +75,33 @@ fi
 # Check if response contains the hash
 if echo "${INFO_RESPONSE}" | grep -q "${RETURNED_HASH}"; then
     echo -e "${GREEN}✓ File info retrieved successfully${NC}"
-    echo -e "${GREEN}✓ Info response: ${INFO_RESPONSE}${NC}"
+
+    # Parse and display file info
+    FILE_SIZE=$(echo "${INFO_RESPONSE}" | grep -o '"size":[0-9]*' | cut -d':' -f2)
+    CREATED_AT=$(echo "${INFO_RESPONSE}" | grep -o '"created_at":"[^"]*"' | cut -d'"' -f4)
+    SPACE_USED=$(echo "${INFO_RESPONSE}" | grep -o '"space_used":[0-9]*' | cut -d':' -f2)
+    SPACE_AVAILABLE=$(echo "${INFO_RESPONSE}" | grep -o '"space_available":[0-9]*' | cut -d':' -f2)
+
+    echo -e "${GREEN}  File Details:${NC}"
+    echo -e "${GREEN}    • Hash: ${RETURNED_HASH}${NC}"
+    echo -e "${GREEN}    • Size: ${FILE_SIZE} bytes${NC}"
+    echo -e "${GREEN}    • Created: ${CREATED_AT}${NC}"
+
+    # Display loop filesystem usage if available
+    if [[ -n "${SPACE_USED}" && -n "${SPACE_AVAILABLE}" ]]; then
+        # Convert bytes to human readable format
+        SPACE_USED_MB=$(echo "scale=2; ${SPACE_USED} / 1048576" | bc 2>/dev/null || echo "N/A")
+        SPACE_AVAILABLE_MB=$(echo "scale=2; ${SPACE_AVAILABLE} / 1048576" | bc 2>/dev/null || echo "N/A")
+        SPACE_TOTAL=$((SPACE_USED + SPACE_AVAILABLE))
+        SPACE_TOTAL_MB=$(echo "scale=2; ${SPACE_TOTAL} / 1048576" | bc 2>/dev/null || echo "N/A")
+
+        echo -e "${GREEN}  Loop Filesystem Usage:${NC}"
+        echo -e "${GREEN}    • Used: ${SPACE_USED} bytes (${SPACE_USED_MB} MB)${NC}"
+        echo -e "${GREEN}    • Available: ${SPACE_AVAILABLE} bytes (${SPACE_AVAILABLE_MB} MB)${NC}"
+        echo -e "${GREEN}    • Total: ${SPACE_TOTAL} bytes (${SPACE_TOTAL_MB} MB)${NC}"
+    else
+        echo -e "${YELLOW}  Loop Filesystem Usage: Not available${NC}"
+    fi
 else
     echo -e "${RED}✗ File info does not contain expected hash${NC}"
     echo -e "${RED}  Response: ${INFO_RESPONSE}${NC}"
@@ -120,6 +146,6 @@ rm -f "${TEST_FILE}"
 echo -e "${GREEN}🎉 All tests passed successfully!${NC}"
 echo -e "${GREEN}   - Created random data file${NC}"
 echo -e "${GREEN}   - Uploaded file to casd${NC}"
-echo -e "${GREEN}   - Verified file info${NC}"
+echo -e "${GREEN}   - Verified file info and loop filesystem usage${NC}"
 echo -e "${GREEN}   - Downloaded and verified file content${NC}"
 echo -e "${GREEN}   - Deleted remote file from casd${NC}"
