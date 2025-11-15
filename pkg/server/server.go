@@ -39,18 +39,18 @@ func NewCASServer(storageDir, webDir, version string, storeImpl store.Store) *CA
 	}
 }
 
-func (cas *CASServer) Start(port string) error {
+func (cas *CASServer) Start(addr string) error {
 	cas.setupRoutes()
 
 	// Start server in a goroutine
 	go func() {
 		log.Info().
-			Str("port", port).
+			Str("addr", addr).
 			Str("storage_dir", cas.storageDir).
 			Str("web_dir", cas.webDir).
 			Msg("Starting CAS server")
 
-		if err := cas.echo.Start(":" + port); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := cas.echo.Start(addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatal().Err(err).Msg("Server startup failed")
 		}
 	}()
@@ -91,11 +91,14 @@ func (cas *CASServer) Shutdown() error {
 }
 
 func (cas *CASServer) setupRoutes() {
+	// Echo configuration
 	cas.echo.HideBanner = true
+	cas.echo.HidePort = true
 	// Setup middleware with custom logger
 	cas.echo.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
 		Format: "${time_rfc3339} ${status} ${method} ${uri} (${latency_human})\n",
 	}))
+	cas.echo.Use(middleware.Gzip())
 	cas.echo.Use(middleware.Recover())
 
 	// Setup routes

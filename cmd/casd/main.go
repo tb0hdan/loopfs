@@ -23,10 +23,10 @@ func main() {
 	// Initialize logger first
 	_ = log.Logger
 
-	storageDir := flag.String("storage", "build/data", "Storage directory path")
+	storageDir := flag.String("storage", "/data/cas", "Storage directory path")
 	webDir := flag.String("web", "web", "Web assets directory path")
-	port := flag.String("port", "8080", "Server port")
-	loopFileSize := flag.Int64("loopsize", oneGB, "Loop file size in megabytes")
+	addr := flag.String("addr", "127.0.0.1:8080", "Server addr")
+	loopFileSize := flag.Int64("loop-size", oneGB, "Loop file size in megabytes (defaults to 1024)")
 	flag.Parse()
 
 	// Check if running as root
@@ -47,7 +47,7 @@ func main() {
 	loopStore := loop.New(*storageDir, *loopFileSize)
 	cas := server.NewCASServer(*storageDir, *webDir, strings.TrimSpace(Version), loopStore)
 
-	if err := cas.Start(*port); err != nil {
+	if err := cas.Start(*addr); err != nil {
 		log.Fatal().Err(err).Msg("Server failed to start")
 	}
 
