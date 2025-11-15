@@ -7,3 +7,5 @@ cryptographic hash.
 
 This approach ensures data integrity, eliminates duplicate storage, 
 and provides a unique identifier for each file based on its content.
+
+Linux only.

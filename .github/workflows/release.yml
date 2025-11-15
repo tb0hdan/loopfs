@@ -49,12 +49,6 @@ jobs:
         # Linux ARM64
         GOOS=linux GOARCH=arm64 go build -o build/casd-linux-arm64 cmd/casd/*.go
 
-        # macOS AMD64
-        GOOS=darwin GOARCH=amd64 go build -o build/casd-darwin-amd64 cmd/casd/*.go
-
-        # macOS ARM64 (M1/M2)
-        GOOS=darwin GOARCH=arm64 go build -o build/casd-darwin-arm64 cmd/casd/*.go
-
     - name: Create release archives
       run: |
         cd build
@@ -62,8 +56,6 @@ jobs:
         # Create tar.gz archives for Unix-like systems
         tar -czf casd-linux-amd64.tar.gz casd-linux-amd64
         tar -czf casd-linux-arm64.tar.gz casd-linux-arm64
-        tar -czf casd-darwin-amd64.tar.gz casd-darwin-amd64
-        tar -czf casd-darwin-arm64.tar.gz casd-darwin-arm64
 
     - name: Generate checksums
       run: |
@@ -88,13 +80,11 @@ jobs:
         ## Downloads
         - **Linux (x86_64)**: casd-linux-amd64.tar.gz
         - **Linux (ARM64)**: casd-linux-arm64.tar.gz
-        - **macOS (Intel)**: casd-darwin-amd64.tar.gz
-        - **macOS (Apple Silicon)**: casd-darwin-arm64.tar.gz
 
         ## Installation
         1. Download the appropriate archive for your platform
         2. Extract the binary
-        3. Run \`./casd\` (or \`casd.exe\` on Windows)
+        3. Run \`./casd\` to start the server
 
         ## Verification
         Use the provided checksums.txt to verify file integrity:
@@ -133,26 +123,6 @@ jobs:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
         asset_path: build/casd-linux-arm64.tar.gz
         asset_name: casd-linux-arm64.tar.gz
-        asset_content_type: application/gzip
-
-    - name: Upload macOS AMD64 Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: build/casd-darwin-amd64.tar.gz
-        asset_name: casd-darwin-amd64.tar.gz
-        asset_content_type: application/gzip
-
-    - name: Upload macOS ARM64 Release Asset
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: build/casd-darwin-arm64.tar.gz
-        asset_name: casd-darwin-arm64.tar.gz
         asset_content_type: application/gzip
 
     - name: Upload Checksums
