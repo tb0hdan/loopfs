@@ -25,7 +25,8 @@ CADS uses a simple file-based storage implementation. Files are stored in a dire
 
 For example, a file with the SHA256 hash `abcdef1234567890...` would be stored in the following path:
 
-```/data/cas/ab/cd/loopef/1234567890...
+```bash
+/data/cas/ab/cd/loopef/1234567890...
 ```
 
 where `/data/cas/ab/cd/loop.img` is the loop file for the content. It gets created on first upload of the content.

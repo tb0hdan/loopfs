@@ -33,8 +33,13 @@ LoopFS/
 │   │   └── swagger.go       # Swagger UI and spec handlers
 │   ├── store/               # Storage abstraction
 │   │   ├── store.go         # Store interface and types
-│   │   └── loop/
-│   │       └── loop.go      # Loop storage implementation
+│   │   └── loop/            # Loop filesystem storage implementation
+│   │       ├── loop.go      # Core loop management and mounting
+│   │       ├── upload.go    # File upload to loop filesystems
+│   │       ├── download.go  # File download from loop filesystems
+│   │       ├── exists.go    # Loop file existence checking
+│   │       ├── get_file_info.go # Metadata from loop filesystems
+│   │       └── validate_hash.go # Hash validation utilities
 │   └── log/
 │       └── logger.go        # Structured logging setup
 ├── web/                     # Web assets
@@ -216,16 +221,17 @@ go build -o build/casd cmd/casd/*.go
 
 ### Running the Server
 ```bash
-# Default configuration (port 8080, build/data storage)
-./build/casd
+# Must run as root for loop device operations
+sudo ./build/casd -storage /data/cas -addr :8080
 
-# Custom storage directory and port
-./build/casd -storage /custom/storage -port 8090 -web ./web
+# Custom configuration with specific loop file size
+sudo ./build/casd -storage /custom/storage -addr :8090 -web ./web -loop-size 2048
 
 # Available command-line options:
-# -storage: Storage directory path (default: "build/data")
+# -storage: Storage directory path (default: "/data/cas")
 # -web: Web assets directory path (default: "web")
-# -port: Server port (default: "8080")
+# -addr: Server bind address (default: "127.0.0.1:8080")
+# -loop-size: Loop file size in MB (default: 1024)
 ```
 
 ### Example Operations
@@ -250,32 +256,74 @@ curl http://localhost:8080/file/abc123.../info
 4. **View API Documentation**:
 Open http://localhost:8080 in a web browser
 
-## Current Implementation Status
+## Current Implementation Status (Updated November 15, 2025)
 
-### Recent Architectural Changes (v1.0.0)
+### Latest Architectural Changes (Commits 9c033cc - "It works!")
 
-The project has been significantly refactored from a single-file implementation to a modular, production-ready architecture:
+The project has been completely rewritten to implement a **loop filesystem-based storage** approach:
 
-1. **Modularization**: Code split into logical packages (`pkg/server/`, `pkg/store/`, `pkg/log/`)
-2. **Interface-Based Design**: Storage operations abstracted through `store.Store` interface
-3. **Professional Logging**: Structured logging with zerolog, goroutine tracking, and consistent formatting
-4. **Improved Error Handling**: Custom error types with proper HTTP status mapping
-5. **Build Infrastructure**: Comprehensive Makefile with lint, test, and coverage tools
-6. **Version Management**: Embedded version string from `cmd/casd/VERSION` file
-7. **Web Assets**: Separate directory structure for Swagger UI templates and specifications
+#### Loop File Storage Architecture
+
+**Key Innovation**: LoopFS now uses **Linux loop filesystems** for content storage instead of traditional file storage. This provides:
+
+1. **Loop File Organization**: Each content hash creates dedicated ext4 loop filesystems
+   - Hash `abcdef123...` → `/data/cas/ab/cd/loop.img` (1GB ext4 loop file)
+   - Files stored inside mounted loop filesystem with hierarchical structure
+   - Automatic mount/unmount during operations with mutex protection
+
+2. **Advanced Hash Partitioning**: Multi-level directory structure:
+   - **Loop Level**: First 4 chars (`ab/cd`) determine loop file location
+   - **Internal Level**: Next 4 chars (`ef/12`) create subdirs inside loop filesystem
+   - **File Level**: Remaining chars (`3...`) become actual filename
+
+3. **Dynamic Filesystem Management**:
+   - Loop files created on-demand using `dd` + `mkfs.ext4`
+   - Automatic mounting/unmounting with `mount -o loop`
+   - Mutex-protected mount operations to prevent race conditions
+   - Mount point validation with `mountpoint` command
+
+#### Code Architecture Improvements
+
+1. **Modular Loop Implementation** (`pkg/store/loop/`):
+   - **`loop.go`**: Core loop filesystem management and mounting logic
+   - **`upload.go`**: File upload with loop mounting and hierarchical storage
+   - **`download.go`**: Temporary file extraction from mounted loops
+   - **`exists.go`**: Loop file existence checking
+   - **`get_file_info.go`**: Metadata retrieval from loop filesystems
+   - **`validate_hash.go`**: SHA256 hash validation
+
+2. **Enhanced Server Requirements**:
+   - **Root Access Required**: Must run as root for loop mounting operations
+   - **Linux-Only**: Depends on Linux loop device functionality
+   - **Storage Path Change**: Default storage changed to `/data/cas`
+   - **Address Binding**: Server now binds to configurable address (`:8080`)
+
+3. **Advanced Configuration**:
+   - **Loop File Size**: Configurable via `-loop-size` flag (default: 1GB)
+   - **Storage Directory**: Configurable via `-storage` flag (default: `/data/cas`)
+   - **Address Binding**: Configurable via `-addr` flag (default: `127.0.0.1:8080`)
+
+#### Technical Implementation Details
+
+- **Loop File Creation**: `dd if=/dev/zero of=loop.img bs=1M count=1024; mkfs.ext4 -q loop.img`
+- **Mount Operations**: `mount -o loop /path/to/loop.img /mount/point`
+- **File Storage**: Files stored as `/mount/point/ef/12/3456789abcdef...` within loop filesystem
+- **Cleanup**: Automatic unmounting after operations with proper error handling
+- **Concurrency**: Mutex protection for all mount/unmount operations
 
 ### Testing and Quality Assurance
 
-- **Unit Tests**: Test coverage tracking with HTML reports (`build/coverage.html`)
-- **Linting**: golangci-lint integration for code quality
-- **Build Automation**: Makefile targets for all development workflows
-- **Error Handling**: Comprehensive error scenarios with appropriate HTTP responses
+- **Test Coverage**: Currently 0.0% - tests need implementation for loop filesystem operations
+- **Build System**: Makefile supports `build`, `test`, `lint`, and `tools` targets
+- **Binary Output**: Compiled to `build/casd` (15MB executable)
+- **Dependencies**: Go 1.25.4, Echo v4, Zerolog, standard Linux utilities
 
-### Dependencies
+### Operational Requirements
 
-- **Echo v4**: High-performance HTTP web framework
-- **Zerolog**: Structured logging with minimal allocation overhead
-- **Standard Library**: Crypto (SHA256), OS operations, HTTP handling
+- **Operating System**: Linux only (requires loop device support)
+- **Privileges**: Must run as root (loop mounting requires elevated privileges)
+- **Disk Space**: Each hash prefix combination can use up to 1GB (configurable)
+- **Mount Points**: Dynamic mount point creation under `/data/cas/loop*/`
 
 ## Security Considerations
 

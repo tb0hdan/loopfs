@@ -1,7 +1,8 @@
 # Claude Instructions
 
 ## On Startup
-Always read docs/PROJECT_NOTES.md first to understand the project context and current state.
+- Always read docs/PROJECT_NOTES.md first to understand the project context and current state.
+- Always exclude build/ directory from any code analysis or modifications.
 
 ## Project Commands
 - Lint: `make lint`
