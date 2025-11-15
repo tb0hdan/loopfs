@@ -21,7 +21,7 @@ See http://localhost:8080/ for the interactive API documentation.
 
 ## Storage implementation
 
-CADS uses a simple file-based storage implementation. Files are stored in a directory structure based on their SHA256 hash.
+CASd uses a simple file-based storage implementation. Files are stored in a directory structure based on their SHA256 hash.
 
 For example, a file with the SHA256 hash `abcdef1234567890...` would be stored in the following path:
 
@@ -29,4 +29,4 @@ For example, a file with the SHA256 hash `abcdef1234567890...` would be stored i
 /data/cas/ab/cd/loopef/1234567890...
 ```
 
-where `/data/cas/ab/cd/loop.img` is the loop file for the content. It gets created on first upload of the content.
+Where `/data/cas/ab/cd/loop.img` is the loop file for the content. It gets created on the first upload of the content.
