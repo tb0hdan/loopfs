@@ -173,6 +173,65 @@ paths:
                   error:
                     type: string
                     example: "failed to get file info"
+  /file/{hash}/delete:
+    delete:
+      summary: Delete a file from CAS storage
+      description: Deletes a file from storage by its SHA256 hash
+      parameters:
+        - name: hash
+          in: path
+          required: true
+          description: SHA256 hash of the file (64 hexadecimal characters)
+          schema:
+            type: string
+            pattern: '^[a-f0-9]{64}$'
+            example: "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+      responses:
+        '200':
+          description: File deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    description: Success message
+                    example: "File deleted successfully"
+                  hash:
+                    type: string
+                    description: SHA256 hash of the deleted file
+                    example: "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+        '400':
+          description: Bad request - invalid hash format
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid hash format"
+        '404':
+          description: File not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "File not found"
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Internal server error"
 components:
   schemas:
     Error:

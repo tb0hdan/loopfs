@@ -107,4 +107,5 @@ func (cas *CASServer) setupRoutes() {
 	cas.echo.POST("/file/upload", cas.uploadFile)
 	cas.echo.GET("/file/:hash/download", cas.downloadFile)
 	cas.echo.GET("/file/:hash/info", cas.getFileInfo)
+	cas.echo.DELETE("/file/:hash/delete", cas.deleteFile)
 }

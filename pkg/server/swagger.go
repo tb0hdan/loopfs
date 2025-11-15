@@ -12,7 +12,7 @@ import (
 )
 
 func (cas *CASServer) serveSwaggerUI(ctx echo.Context) error {
-	tmplPath := filepath.Join(cas.webDir, "swagger-ui.tmpl")
+	tmplPath := filepath.Join(cas.webDir, "swagger-ui.html")
 	tmpl, err := template.ParseFiles(tmplPath)
 	if err != nil {
 		log.Error().Err(err).Str("template_path", tmplPath).Msg("Failed to load template")

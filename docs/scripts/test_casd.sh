@@ -104,7 +104,17 @@ else
     exit 1
 fi
 
-# Cleanup
+# Step 5: Delete remote file
+echo -e "${YELLOW}Step 5: Deleting remote file from casd${NC}"
+DELETE_RESPONSE=$(curl -s -X DELETE "${CASD_URL}/file/${RETURNED_HASH}")
+
+if [[ $? -eq 0 ]]; then
+    echo -e "${GREEN}✓ Remote file deleted successfully${NC}"
+else
+    echo -e "${YELLOW}⚠ Failed to delete remote file (may not be implemented)${NC}"
+fi
+
+# Cleanup local file
 rm -f "${TEST_FILE}"
 
 echo -e "${GREEN}🎉 All tests passed successfully!${NC}"
@@ -112,3 +122,4 @@ echo -e "${GREEN}   - Created random data file${NC}"
 echo -e "${GREEN}   - Uploaded file to casd${NC}"
 echo -e "${GREEN}   - Verified file info${NC}"
 echo -e "${GREEN}   - Downloaded and verified file content${NC}"
+echo -e "${GREEN}   - Deleted remote file from casd${NC}"

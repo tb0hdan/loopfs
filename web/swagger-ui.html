@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>CAS Server API Documentation</title>
+    <title>{{.Title}}</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
 </head>
 <body>
@@ -11,7 +11,7 @@
     <script>
         window.onload = async () => {
             try {
-                const response = await fetch('/swagger.yml');
+                const response = await fetch('{{.SwaggerPath}}');
                 const spec = await response.text();
 
                 window.ui = SwaggerUIBundle({

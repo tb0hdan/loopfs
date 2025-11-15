@@ -36,6 +36,10 @@ type Store interface {
 
 	// ValidateHash checks if a hash string is valid format.
 	ValidateHash(hash string) bool
+
+	// Delete removes a file with the given hash from storage.
+	// Returns an error if the file doesn't exist or hash is invalid.
+	Delete(hash string) error
 }
 
 // FileExistsError is returned when trying to upload a file that already exists.
