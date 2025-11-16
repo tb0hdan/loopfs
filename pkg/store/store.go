@@ -32,6 +32,7 @@ type Store interface {
 
 	// Download retrieves a file by its hash and returns the file path.
 	// Returns an error if the file doesn't exist or hash is invalid.
+	//
 	// Deprecated: Use DownloadStream for better performance with large files.
 	Download(hash string) (string, error)
 
