@@ -19,6 +19,7 @@ import (
 
 const (
 	shutdownTimeout = 10
+	syncTimeout     = 30
 )
 
 type CASServer struct {
@@ -77,9 +78,12 @@ func (cas *CASServer) Shutdown() error {
 
 	log.Info().Msg("Server gracefully stopped")
 
-	// Execute sync command to flush filesystem buffers
+	// Execute sync command to flush filesystem buffers with a fresh context
 	log.Info().Msg("Executing sync command...")
-	cmd := exec.Command("sync")
+	syncCtx, syncCancel := context.WithTimeout(context.Background(), syncTimeout*time.Second)
+	defer syncCancel()
+
+	cmd := exec.CommandContext(syncCtx, "sync")
 	if err := cmd.Run(); err != nil {
 		log.Warn().Err(err).Msg("Sync command failed")
 	} else {
@@ -98,7 +102,13 @@ func (cas *CASServer) setupRoutes() {
 	cas.echo.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
 		Format: "${time_rfc3339} ${status} ${method} ${uri} (${latency_human})\n",
 	}))
-	cas.echo.Use(middleware.Gzip())
+
+	//  The server must not gzip every response globally.
+	//  File downloads therefore return compressed bytes whenever the client advertises Accept-Encoding: gzip, i.e., default curl/wget behavior.
+	//  Clients expecting to receive the exact stored bytes (as implied by a CAS) instead get a re-encoded stream and
+	//  must remember to decompress it, defeating the “download raw blob by hash” contract and burning CPU.
+	// cas.echo.Use(middleware.Gzip())
+
 	cas.echo.Use(middleware.Recover())
 
 	// Setup routes

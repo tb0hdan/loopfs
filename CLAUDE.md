@@ -2,10 +2,11 @@
 
 ## On Startup
 - Always read docs/PROJECT_NOTES.md first to understand the project context and current state.
-- Always exclude build/ directory from any code analysis or modifications.
+- Always exclude the build/ directory from any code analysis or modifications.
 - Always keep Swagger documentation up to date with any API changes.
 - Always add a new line to the end of each file you modify.
 - Always follow Effective Go guidelines for code style and conventions.
+- Do not create tests for cmd/ directory files.
 
 ## Project Commands
 - Lint: `make lint`

@@ -8,6 +8,8 @@ linters:
     - asciicheck
     - bodyclose
     - containedctx
+    - contextcheck
+    - cyclop
     - decorder
     - dogsled
     - dupl
@@ -17,15 +19,25 @@ linters:
     - fatcontext
     - forcetypeassert
     - funcorder
+    - funlen
+    - gocritic
     - gocyclo
     - godot
     - godox
     - gosec
+    - grouper
+    - iface
+    - importas
+    - ineffassign
+    - interfacebloat
     - intrange
     - loggercheck
     - mnd
     - nilerr
     - nilnil
+    - noctx
+    - perfsprint
+    - prealloc
     - reassign
     - testifylint
     - unconvert

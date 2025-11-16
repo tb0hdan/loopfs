@@ -2,12 +2,14 @@ package loop
 
 import (
 	"os"
+	"strings"
 
 	"loopfs/pkg/store"
 )
 
 // Exists checks if a file with the given hash exists in storage.
 func (s *Store) Exists(hash string) (bool, error) {
+	hash = strings.ToLower(hash)
 	if !s.ValidateHash(hash) {
 		return false, store.InvalidHashError{Hash: hash}
 	}

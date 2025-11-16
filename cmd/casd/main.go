@@ -34,7 +34,7 @@ func main() {
 		log.Fatal().Msg("casd must be run as root")
 	}
 
-	// Ensure storage directory exists
+	// Ensure a storage directory exists.
 	if err := os.MkdirAll(*storageDir, storageDirPerm); err != nil {
 		log.Fatal().Err(err).Str("storage_dir", *storageDir).Msg("Failed to create storage directory")
 	}

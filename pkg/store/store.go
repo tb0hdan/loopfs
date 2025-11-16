@@ -32,7 +32,13 @@ type Store interface {
 
 	// Download retrieves a file by its hash and returns the file path.
 	// Returns an error if the file doesn't exist or hash is invalid.
+	// Deprecated: Use DownloadStream for better performance with large files.
 	Download(hash string) (string, error)
+
+	// DownloadStream retrieves a file by its hash and returns a streaming reader.
+	// The caller must call Close() on the returned reader to cleanup resources.
+	// Returns an error if the file doesn't exist or hash is invalid.
+	DownloadStream(hash string) (io.ReadCloser, error)
 
 	// GetFileInfo retrieves metadata about a stored file.
 	// Returns an error if the file doesn't exist or hash is invalid.

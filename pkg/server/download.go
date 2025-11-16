@@ -3,7 +3,6 @@ package server
 import (
 	"errors"
 	"net/http"
-	"os"
 
 	"loopfs/pkg/log"
 	"loopfs/pkg/store"
@@ -15,7 +14,7 @@ func (cas *CASServer) downloadFile(ctx echo.Context) error {
 	hash := ctx.Param("hash")
 	log.Info().Str("hash", hash).Msg("File download request")
 
-	filePath, err := cas.store.Download(hash)
+	reader, err := cas.store.DownloadStream(hash)
 	if err != nil {
 		var notFoundErr store.FileNotFoundError
 		if errors.As(err, &notFoundErr) {
@@ -35,16 +34,15 @@ func (cas *CASServer) downloadFile(ctx echo.Context) error {
 		})
 	}
 
-	log.Info().Str("hash", hash).Str("file_path", filePath).Msg("Serving file download")
-
-	// Schedule cleanup of temporary file after serving
+	// Ensure reader is closed after serving to cleanup mount resources
 	defer func() {
-		if err := os.Remove(filePath); err != nil {
-			log.Error().Err(err).Str("temp_file", filePath).Msg("Failed to cleanup temporary download file")
-		} else {
-			log.Debug().Str("temp_file", filePath).Msg("Cleaned up temporary download file")
+		if err := reader.Close(); err != nil {
+			log.Error().Err(err).Str("hash", hash).Msg("Failed to close streaming reader")
 		}
 	}()
 
-	return ctx.File(filePath)
+	log.Info().Str("hash", hash).Msg("Serving streaming file download")
+
+	// Stream the file directly to the client
+	return ctx.Stream(http.StatusOK, "application/octet-stream", reader)
 }

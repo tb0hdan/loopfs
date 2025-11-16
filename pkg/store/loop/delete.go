@@ -2,6 +2,7 @@ package loop
 
 import (
 	"os"
+	"strings"
 
 	"loopfs/pkg/log"
 	"loopfs/pkg/store"
@@ -9,12 +10,13 @@ import (
 
 // Delete removes a file with the given hash from storage.
 func (s *Store) Delete(hash string) error {
+	hash = strings.ToLower(hash)
 	if !s.ValidateHash(hash) {
 		log.Debug().Str("hash", hash).Msg("Invalid hash format for delete")
 		return store.InvalidHashError{Hash: hash}
 	}
 
-	// First check if file exists before attempting to mount
+	// First check if the file exists before attempting to mount
 	exists, err := s.Exists(hash)
 	if err != nil {
 		return err

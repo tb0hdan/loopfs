@@ -3,6 +3,7 @@ package server
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -20,6 +21,9 @@ func (cas *CASServer) deleteFile(ctx echo.Context) error {
 		Str("path", ctx.Request().URL.Path).
 		Msg("File delete request")
 
+	// Normalize hash to lowercase for consistent handling
+	hash = strings.ToLower(hash)
+
 	// Validate hash format
 	if !cas.store.ValidateHash(hash) {
 		log.Warn().Str("hash", hash).Msg("Invalid hash format for delete")
@@ -30,20 +34,23 @@ func (cas *CASServer) deleteFile(ctx echo.Context) error {
 
 	// Delete the file
 	if err := cas.store.Delete(hash); err != nil {
-		var fileNotFoundErr store.FileNotFoundError
-		var invalidHashErr store.InvalidHashError
+		var (
+			fileNotFoundErr store.FileNotFoundError
+			invalidHashErr  store.InvalidHashError
+		)
 
-		if errors.As(err, &fileNotFoundErr) {
+		switch {
+		case errors.As(err, &fileNotFoundErr):
 			log.Warn().Str("hash", hash).Msg("File not found for delete")
 			return ctx.JSON(http.StatusNotFound, map[string]string{
 				"error": "File not found",
 			})
-		} else if errors.As(err, &invalidHashErr) {
+		case errors.As(err, &invalidHashErr):
 			log.Warn().Str("hash", hash).Msg("Invalid hash for delete")
 			return ctx.JSON(http.StatusBadRequest, map[string]string{
 				"error": "Invalid hash format",
 			})
-		} else {
+		default:
 			log.Error().Err(err).Str("hash", hash).Msg("Delete failed")
 			return ctx.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "Internal server error",

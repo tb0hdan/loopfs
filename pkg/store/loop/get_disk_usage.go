@@ -9,7 +9,6 @@ import (
 	"loopfs/pkg/store"
 )
 
-
 // GetDiskUsage returns disk space information for a specific file's loop filesystem.
 func (s *Store) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 	hash = strings.ToLower(hash)
@@ -66,9 +65,9 @@ func (s *Store) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 		log.Debug().
 			Str("hash", hash).
 			Str("mount_point", mountPoint).
-			Int64("used", int64(spaceUsed)).      //nolint:gosec // Safe for logging
+			Int64("used", int64(spaceUsed)).           //nolint:gosec // Safe for logging
 			Int64("available", int64(spaceAvailable)). //nolint:gosec // Safe for logging
-			Int64("total", int64(totalSpace)).    //nolint:gosec // Safe for logging
+			Int64("total", int64(totalSpace)).         //nolint:gosec // Safe for logging
 			Msg("Loop filesystem stats")
 
 		return nil
