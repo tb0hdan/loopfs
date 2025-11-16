@@ -21,21 +21,21 @@ func (s *Store) Upload(reader io.Reader, filename string) (*store.UploadResult, 
 	}
 	defer s.cleanupTempFile(tempFile)
 
-	// Check if file already exists
-	if exists, err := s.Exists(hash); err != nil {
-		return nil, err
-	} else if exists {
-		log.Info().Str("hash", hash).Msg("File already exists")
-		return nil, store.FileExistsError{Hash: hash}
-	}
-
-	// Upload the file using mounted loop file
-	err = s.withMountedLoop(hash, func() error {
-		return s.saveFileToLoop(hash, tempFile)
+	// Atomic check-and-create to prevent race conditions in deduplication
+	created, err := s.atomicCheckAndCreate(hash, func() error {
+		return s.withMountedLoop(hash, func() error {
+			return s.saveFileToLoop(hash, tempFile)
+		})
 	})
 
 	if err != nil {
 		return nil, err
+	}
+
+	if !created {
+		// File already existed, return conflict
+		log.Info().Str("hash", hash).Msg("File already exists")
+		return nil, store.FileExistsError{Hash: hash}
 	}
 
 	log.Info().Str("hash", hash).Str("filename", filename).Msg("File uploaded successfully")
@@ -60,6 +60,74 @@ func (s *Store) processAndHashFile(reader io.Reader) (string, *os.File, error) {
 
 	hash := hex.EncodeToString(hasher.Sum(nil))
 	return hash, tempFile, nil
+}
+
+// atomicCheckAndCreate performs atomic check-and-create operation for deduplication.
+// Returns true if the file was created by this call, false if it already existed.
+// If it returns false, the caller should return a FileExistsError.
+func (s *Store) atomicCheckAndCreate(hash string, createFunc func() error) (bool, error) {
+	// Get per-hash mutex for atomic check-and-create
+	deduplicationMutex := s.getDeduplicationMutex(hash)
+	deduplicationMutex.Lock()
+	defer func() {
+		deduplicationMutex.Unlock()
+		s.cleanupDeduplicationMutex(hash)
+	}()
+
+	// Double-check if file exists now that we have the lock
+	exists, err := s.existsWithoutLock(hash)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		log.Info().Str("hash", hash).Msg("File already exists (detected after acquiring lock)")
+		return false, nil // File exists, should return conflict
+	}
+
+	// File doesn't exist, create it
+	if err := createFunc(); err != nil {
+		return false, err
+	}
+
+	return true, nil // File was created successfully
+}
+
+// existsWithoutLock is a helper version of Exists that doesn't acquire any per-hash locks.
+// This is used internally by atomicCheckAndCreate to avoid deadlock.
+func (s *Store) existsWithoutLock(hash string) (bool, error) {
+	if !s.ValidateHash(hash) {
+		return false, store.InvalidHashError{Hash: hash}
+	}
+
+	// Check if loop file exists first
+	loopFilePath := s.getLoopFilePath(hash)
+	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+
+	var exists bool
+	err := s.withMountedLoop(hash, func() error {
+		filePath := s.getFilePath(hash)
+		if filePath == "" {
+			return store.InvalidHashError{Hash: hash}
+		}
+
+		_, err := os.Stat(filePath)
+		if os.IsNotExist(err) {
+			exists = false
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+
+		exists = true
+		return nil
+	})
+
+	return exists, err
 }
 
 // saveFileToLoop saves the temporary file to the loop filesystem.
@@ -116,21 +184,21 @@ func (s *Store) UploadWithHash(tempFilePath, hash, filename string) (*store.Uplo
 		return nil, store.InvalidHashError{Hash: hash}
 	}
 
-	// Check if file already exists
-	if exists, err := s.Exists(hash); err != nil {
-		return nil, err
-	} else if exists {
-		log.Info().Str("hash", hash).Msg("File already exists")
-		return nil, store.FileExistsError{Hash: hash}
-	}
-
-	// Upload the file using mounted loop file
-	err := s.withMountedLoop(hash, func() error {
-		return s.saveFileToLoopFromPath(hash, tempFilePath)
+	// Atomic check-and-create to prevent race conditions in deduplication
+	created, err := s.atomicCheckAndCreate(hash, func() error {
+		return s.withMountedLoop(hash, func() error {
+			return s.saveFileToLoopFromPath(hash, tempFilePath)
+		})
 	})
 
 	if err != nil {
 		return nil, err
+	}
+
+	if !created {
+		// File already existed, return conflict
+		log.Info().Str("hash", hash).Msg("File already exists")
+		return nil, store.FileExistsError{Hash: hash}
 	}
 
 	log.Info().Str("hash", hash).Str("filename", filename).Msg("File uploaded successfully")

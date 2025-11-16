@@ -28,22 +28,25 @@ const (
 
 // Store implements the store.Store interface for Loop CAS storage.
 type Store struct {
-	storageDir    string
-	loopFileSize  int64
-	mountMutex    sync.Mutex
-	creationMutex sync.Mutex
-	creationLocks map[string]*sync.Mutex
-	refCountMutex sync.Mutex
-	refCounts     map[string]int
+	storageDir       string
+	loopFileSize     int64
+	mountMutex       sync.Mutex
+	creationMutex    sync.Mutex
+	creationLocks    map[string]*sync.Mutex
+	refCountMutex    sync.Mutex
+	refCounts        map[string]int
+	deduplicationMutex sync.Mutex
+	deduplicationLocks map[string]*sync.Mutex
 }
 
 // New creates a new Loop store with the specified storage directory and loop file size.
 func New(storageDir string, loopFileSize int64) *Store {
 	return &Store{
-		storageDir:    storageDir,
-		loopFileSize:  loopFileSize,
-		creationLocks: make(map[string]*sync.Mutex),
-		refCounts:     make(map[string]int),
+		storageDir:         storageDir,
+		loopFileSize:       loopFileSize,
+		creationLocks:      make(map[string]*sync.Mutex),
+		refCounts:          make(map[string]int),
+		deduplicationLocks: make(map[string]*sync.Mutex),
 	}
 }
 
@@ -116,6 +119,31 @@ func (s *Store) cleanupCreationMutex(loopFilePath string) {
 	if _, err := os.Stat(loopFilePath); err == nil {
 		delete(s.creationLocks, loopFilePath)
 	}
+}
+
+// getDeduplicationMutex returns or creates a mutex for the given hash.
+// This ensures that only one goroutine can check and create a file for a specific hash at a time.
+func (s *Store) getDeduplicationMutex(hash string) *sync.Mutex {
+	s.deduplicationMutex.Lock()
+	defer s.deduplicationMutex.Unlock()
+
+	if mutex, exists := s.deduplicationLocks[hash]; exists {
+		return mutex
+	}
+
+	mutex := &sync.Mutex{}
+	s.deduplicationLocks[hash] = mutex
+	return mutex
+}
+
+// cleanupDeduplicationMutex removes the mutex for the given hash if no longer needed.
+// This prevents memory leaks from the deduplicationLocks map.
+func (s *Store) cleanupDeduplicationMutex(hash string) {
+	s.deduplicationMutex.Lock()
+	defer s.deduplicationMutex.Unlock()
+
+	// Always clean up after upload completion (success or failure)
+	delete(s.deduplicationLocks, hash)
 }
 
 // incrementRefCount increments the reference count for a mount point.
