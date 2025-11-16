@@ -60,7 +60,7 @@ jobs:
     - name: Generate checksums
       run: |
         cd build
-        sha256sum *.tar.gz *.zip > checksums.txt
+        sha256sum *.tar.gz > checksums.txt
 
     - name: Extract release notes
       id: extract_notes
