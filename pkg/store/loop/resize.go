@@ -98,7 +98,7 @@ func (s *Store) syncDataBetweenLoops(mountPoint, newMountPoint string, estimated
 	defer cancel()
 
 	//nolint:gosec // sourcePath and destPath are constructed from validated hash, not user input
-	cmd := exec.CommandContext(ctx, "rsync", "-avuz", sourcePath, destPath)
+	cmd := exec.CommandContext(ctx, "rsync", "-au", sourcePath, destPath)
 
 	log.Debug().
 		Str("source", sourcePath).

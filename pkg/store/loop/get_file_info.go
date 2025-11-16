@@ -16,8 +16,15 @@ func (s *Store) GetFileInfo(hash string) (*store.FileInfo, error) {
 		return nil, store.InvalidHashError{Hash: hash}
 	}
 
-	// Check if loop file exists first
 	loopFilePath := s.getLoopFilePath(hash)
+
+	// Acquire read lock for resize coordination before checking existence
+	// This prevents race conditions where a resize operation temporarily renames the file
+	resizeLock := s.getResizeLock(loopFilePath)
+	resizeLock.RLock()
+	defer resizeLock.RUnlock()
+
+	// Check if loop file exists (now protected by read lock)
 	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
 		log.Info().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
 		return nil, store.FileNotFoundError{Hash: hash}
@@ -26,7 +33,8 @@ func (s *Store) GetFileInfo(hash string) (*store.FileInfo, error) {
 	}
 
 	var fileInfo *store.FileInfo
-	err := s.withMountedLoop(hash, func() error {
+	// Use withMountedLoopUnlocked since we already hold the resize lock
+	err := s.withMountedLoopUnlocked(hash, func() error {
 		filePath, err := s.findFileInLoop(hash)
 		if err != nil {
 			log.Info().Str("hash", hash).Msg("File not found in loop")

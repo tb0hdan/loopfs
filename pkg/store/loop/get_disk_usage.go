@@ -18,8 +18,15 @@ func (s *Store) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 		return nil, store.InvalidHashError{Hash: hash}
 	}
 
-	// Check if the loop file exists
 	loopFilePath := s.getLoopFilePath(hash)
+
+	// Acquire read lock for resize coordination before checking existence
+	// This prevents race conditions where a resize operation temporarily renames the file
+	resizeLock := s.getResizeLock(loopFilePath)
+	resizeLock.RLock()
+	defer resizeLock.RUnlock()
+
+	// Check if the loop file exists (now protected by read lock)
 	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
 		log.Info().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
 		return nil, store.FileNotFoundError{Hash: hash}
@@ -29,8 +36,8 @@ func (s *Store) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 
 	var diskUsage *store.DiskUsage
 
-	// Use withMountedLoop to ensure the loop is mounted before getting stats
-	err := s.withMountedLoop(hash, func() error {
+	// Use withMountedLoopUnlocked since we already hold the resize lock
+	err := s.withMountedLoopUnlocked(hash, func() error {
 		mountPoint := s.getMountPoint(hash)
 
 		// Get filesystem statistics for this mount point

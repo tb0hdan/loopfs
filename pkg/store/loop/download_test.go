@@ -103,29 +103,15 @@ func (s *DownloadTestSuite) TestDownloadStreamCaseInsensitive() {
 	s.IsType(store.FileNotFoundError{}, err)
 }
 
-// TestValidateHashAndLoopFile tests the validateHashAndLoopFile helper function
-func (s *DownloadTestSuite) TestValidateHashAndLoopFile() {
+// TestValidateHash tests the ValidateHash function
+func (s *DownloadTestSuite) TestValidateHash() {
 	// Test invalid hash
-	err := s.store.validateHashAndLoopFile("invalid")
-	s.Error(err)
-	s.IsType(store.InvalidHashError{}, err)
+	result := s.store.ValidateHash("invalid")
+	s.False(result)
 
-	// Test valid hash but non-existent loop file
-	err = s.store.validateHashAndLoopFile(s.testHash)
-	s.Error(err)
-	s.IsType(store.FileNotFoundError{}, err)
-
-	// Test with existing loop file
-	loopDir := filepath.Join(s.tempDir, s.testHash[:2], s.testHash[2:4])
-	err = os.MkdirAll(loopDir, 0755)
-	s.NoError(err)
-
-	loopFile := filepath.Join(loopDir, "loop.img")
-	err = os.WriteFile(loopFile, []byte("fake loop file"), 0644)
-	s.NoError(err)
-
-	err = s.store.validateHashAndLoopFile(s.testHash)
-	s.NoError(err) // Should succeed now that loop file exists
+	// Test valid hash
+	result = s.store.ValidateHash(s.testHash)
+	s.True(result)
 }
 
 // TestCopyFileToTempNonExistentFile tests copyFileToTemp with non-existent source
@@ -454,13 +440,13 @@ func (s *DownloadTestSuite) TestDownloadPanicRecovery() {
 	}
 }
 
-// TestEnsureLoopFileExists tests ensureLoopFileExists helper function
-func (s *DownloadTestSuite) TestEnsureLoopFileExists() {
+// TestEnsureLoopFileExistsUnlocked tests ensureLoopFileExistsUnlocked helper function
+func (s *DownloadTestSuite) TestEnsureLoopFileExistsUnlocked() {
 	// Test with non-existent loop file - will try to create it
-	err := s.store.ensureLoopFileExists(s.testHash)
+	err := s.store.ensureLoopFileExistsUnlocked(s.testHash)
 	// May succeed or fail depending on test environment
 	if err != nil {
-		s.T().Logf("ensureLoopFileExists failed as expected: %v", err)
+		s.T().Logf("ensureLoopFileExistsUnlocked failed as expected: %v", err)
 	}
 }
 
@@ -474,26 +460,39 @@ func (s *DownloadTestSuite) TestPrepareMountForStreaming() {
 	s.T().Logf("prepareMountForStreaming failed as expected: %v", err)
 }
 
-// TestCleanupAfterError tests cleanupAfterError helper
-func (s *DownloadTestSuite) TestCleanupAfterError() {
+// TestCleanupAfterErrorWithLock tests cleanupAfterErrorWithLock helper
+func (s *DownloadTestSuite) TestCleanupAfterErrorWithLock() {
 	mountPoint := s.store.getMountPoint(s.testHash)
+	loopFilePath := s.store.getLoopFilePath(s.testHash)
+	resizeLock := s.store.getResizeLock(loopFilePath)
 
-	// This should not panic or cause issues
-	s.store.cleanupAfterError(s.testHash, mountPoint)
+	// Acquire the lock before cleanup
+	resizeLock.RLock()
+	// This should not panic or cause issues and will release the lock
+	s.store.cleanupAfterErrorWithLock(s.testHash, mountPoint, resizeLock)
 	// No assertions needed - just verify it doesn't panic
 }
 
-// TestOpenStreamingReader tests the openStreamingReader method
-func (s *DownloadTestSuite) TestOpenStreamingReader() {
-	// Test with invalid hash (should return error)
-	reader, err := s.store.openStreamingReader("invalidhash", "/tmp/mount")
-	s.Error(err)
-	s.Nil(reader)
+// TestOpenStreamingReaderWithLock tests the openStreamingReaderWithLock method
+func (s *DownloadTestSuite) TestOpenStreamingReaderWithLock() {
+	loopFilePath := s.store.getLoopFilePath(s.testHash)
+	resizeLock := s.store.getResizeLock(loopFilePath)
 
-	// Test with valid hash but no loop file (should return error)
-	reader, err = s.store.openStreamingReader(s.testHash, "/tmp/mount")
+	// Acquire the lock as the function expects it to be held
+	resizeLock.RLock()
+	// Test with invalid hash (should return error and release the lock)
+	reader, err := s.store.openStreamingReaderWithLock("invalidhash", "/tmp/mount", resizeLock)
 	s.Error(err)
 	s.Nil(reader)
+	// Lock should have been released by cleanupAfterErrorWithLock
+
+	// Acquire the lock again for the next test
+	resizeLock.RLock()
+	// Test with valid hash but no loop file (should return error and release the lock)
+	reader, err = s.store.openStreamingReaderWithLock(s.testHash, "/tmp/mount", resizeLock)
+	s.Error(err)
+	s.Nil(reader)
+	// Lock should have been released by cleanupAfterErrorWithLock
 
 	// The method expects to find a file in a mounted loop, which won't exist in test environment
 	// This still exercises the method path and error handling

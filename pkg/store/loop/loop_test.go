@@ -468,7 +468,7 @@ func (s *LoopStoreTestSuite) TestWithMountedLoop() {
 
 // TestDownloadEdgeCases tests additional download scenarios
 func (s *LoopStoreTestSuite) TestDownloadEdgeCases() {
-	// Test validateHashAndLoopFile function indirectly
+	// Test Download with non-existent loop file
 	validHash := "abcd123456789012345678901234567890123456789012345678901234567890"
 	_, err := s.store.Download(validHash)
 	s.Error(err) // Should fail because loop file doesn't exist
@@ -620,16 +620,15 @@ func (s *LoopStoreTestSuite) TestHashLengthValidation() {
 
 // TestDownloadWithMountedLoop tests the Download function with actual mounted loop
 func (s *LoopStoreTestSuite) TestDownloadWithMountedLoop() {
-	// Test validateHashAndLoopFile with various scenarios
 	validHash := s.testHash
 
-	// Test with invalid hash
-	err := s.store.validateHashAndLoopFile("invalid")
+	// Test Download with invalid hash
+	_, err := s.store.Download("invalid")
 	s.Error(err)
 	s.IsType(store.InvalidHashError{}, err)
 
-	// Test with valid hash but non-existent loop file
-	err = s.store.validateHashAndLoopFile(validHash)
+	// Test Download with valid hash but non-existent loop file
+	_, err = s.store.Download(validHash)
 	s.Error(err)
 	s.IsType(store.FileNotFoundError{}, err)
 }

@@ -64,6 +64,7 @@ func (cas *CASServer) Start(addr string) error {
 		log.Info().
 			Str("addr", addr).
 			Str("storage_dir", cas.storageDir).
+			Str("version", cas.version).
 			Str("web_dir", cas.webDir).
 			Msg("Starting CAS server")
 

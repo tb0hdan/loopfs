@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"loopfs/pkg/log"
 	"loopfs/pkg/store"
@@ -12,12 +13,29 @@ import (
 // Download retrieves a file by its hash and returns a temporary file path.
 func (s *Store) Download(hash string) (string, error) {
 	hash = strings.ToLower(hash)
-	if err := s.validateHashAndLoopFile(hash); err != nil {
+	if !s.ValidateHash(hash) {
+		log.Error().Str("hash", hash).Msg("Invalid hash format")
+		return "", store.InvalidHashError{Hash: hash}
+	}
+
+	loopFilePath := s.getLoopFilePath(hash)
+
+	// Acquire read lock for resize coordination before checking existence
+	resizeLock := s.getResizeLock(loopFilePath)
+	resizeLock.RLock()
+	defer resizeLock.RUnlock()
+
+	// Check if loop file exists (now protected by read lock)
+	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
+		log.Info().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
+		return "", store.FileNotFoundError{Hash: hash}
+	} else if err != nil {
 		return "", err
 	}
 
 	var tempFilePath string
-	err := s.withMountedLoop(hash, func() error {
+	// Use withMountedLoopUnlocked since we already hold the lock
+	err := s.withMountedLoopUnlocked(hash, func() error {
 		filePath, err := s.findFileInLoop(hash)
 		if err != nil {
 			log.Info().Str("hash", hash).Msg("File not found in loop")
@@ -40,24 +58,6 @@ func (s *Store) Download(hash string) (string, error) {
 	return tempFilePath, nil
 }
 
-// validateHashAndLoopFile validates hash format and checks if loop file exists.
-func (s *Store) validateHashAndLoopFile(hash string) error {
-	if !s.ValidateHash(hash) {
-		log.Error().Str("hash", hash).Msg("Invalid hash format")
-		return store.InvalidHashError{Hash: hash}
-	}
-
-	// Check if loop file exists first
-	loopFilePath := s.getLoopFilePath(hash)
-	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
-		log.Info().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
-		return store.FileNotFoundError{Hash: hash}
-	} else if err != nil {
-		return err
-	}
-
-	return nil
-}
 
 // copyFileToTemp creates a temporary file and copies the source file content to it.
 func (s *Store) copyFileToTemp(filePath, hash string) (string, error) {
@@ -104,6 +104,7 @@ type streamingReader struct {
 	store      *Store
 	hash       string
 	mountPoint string
+	resizeLock *sync.RWMutex // Hold resize read lock for the duration of streaming
 }
 
 // Read implements io.Reader.
@@ -128,9 +129,14 @@ func (sr *streamingReader) Close() error {
 		if err := sr.store.unmountLoopFile(sr.hash); err != nil {
 			log.Error().Err(err).Str("hash", sr.hash).Msg("Failed to unmount loop file during streaming cleanup")
 			if fileErr == nil {
-				return err
+				fileErr = err
 			}
 		}
+	}
+
+	// Release the resize read lock now that we're done with the file
+	if sr.resizeLock != nil {
+		sr.resizeLock.RUnlock()
 	}
 
 	return fileErr
@@ -140,24 +146,46 @@ func (sr *streamingReader) Close() error {
 // The caller must call Close() on the returned reader to cleanup resources.
 func (s *Store) DownloadStream(hash string) (io.ReadCloser, error) {
 	hash = strings.ToLower(hash)
-	if err := s.validateHashAndLoopFile(hash); err != nil {
-		return nil, err
+	if !s.ValidateHash(hash) {
+		log.Error().Str("hash", hash).Msg("Invalid hash format")
+		return nil, store.InvalidHashError{Hash: hash}
 	}
 
-	if err := s.ensureLoopFileExists(hash); err != nil {
-		return nil, err
-	}
-
+	loopFilePath := s.getLoopFilePath(hash)
 	mountPoint := s.getMountPoint(hash)
-	if err := s.prepareMountForStreaming(hash, mountPoint); err != nil {
+
+	// Acquire resize read lock that will be held for the duration of streaming
+	// and released when the streaming reader is closed
+	resizeLock := s.getResizeLock(loopFilePath)
+	resizeLock.RLock()
+	// Note: RUnlock is called in streamingReader.Close()
+
+	// Check if loop file exists under lock protection
+	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
+		resizeLock.RUnlock()
+		log.Info().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
+		return nil, store.FileNotFoundError{Hash: hash}
+	} else if err != nil {
+		resizeLock.RUnlock()
 		return nil, err
 	}
 
-	return s.openStreamingReader(hash, mountPoint)
+	// Ensure loop file exists and create if needed
+	if err := s.ensureLoopFileExistsUnlocked(hash); err != nil {
+		resizeLock.RUnlock()
+		return nil, err
+	}
+
+	if err := s.prepareMountForStreaming(hash, mountPoint); err != nil {
+		resizeLock.RUnlock()
+		return nil, err
+	}
+
+	return s.openStreamingReaderWithLock(hash, mountPoint, resizeLock)
 }
 
-// ensureLoopFileExists handles loop file creation with proper synchronization.
-func (s *Store) ensureLoopFileExists(hash string) error {
+// ensureLoopFileExistsUnlocked handles loop file creation assuming resize lock is already held.
+func (s *Store) ensureLoopFileExistsUnlocked(hash string) error {
 	loopFilePath := s.getLoopFilePath(hash)
 
 	// Get per-loop-file mutex to synchronize creation
@@ -193,12 +221,12 @@ func (s *Store) prepareMountForStreaming(hash, mountPoint string) error {
 	return nil
 }
 
-// openStreamingReader opens the file and creates the streaming reader.
-func (s *Store) openStreamingReader(hash, mountPoint string) (io.ReadCloser, error) {
+// openStreamingReaderWithLock opens the file and creates the streaming reader with resize lock.
+func (s *Store) openStreamingReaderWithLock(hash, mountPoint string, resizeLock *sync.RWMutex) (io.ReadCloser, error) {
 	// Find and open the file within the mounted loop filesystem
 	filePath, err := s.findFileInLoop(hash)
 	if err != nil {
-		s.cleanupAfterError(hash, mountPoint)
+		s.cleanupAfterErrorWithLock(hash, mountPoint, resizeLock)
 		log.Info().Str("hash", hash).Msg("File not found in loop")
 		return nil, err
 	}
@@ -206,28 +234,33 @@ func (s *Store) openStreamingReader(hash, mountPoint string) (io.ReadCloser, err
 	//nolint:gosec // filePath is constructed from validated hash, not user input
 	file, err := os.Open(filePath)
 	if err != nil {
-		s.cleanupAfterError(hash, mountPoint)
+		s.cleanupAfterErrorWithLock(hash, mountPoint, resizeLock)
 		log.Error().Err(err).Str("file_path", filePath).Msg("Failed to open file for streaming download")
 		return nil, err
 	}
 
 	log.Info().Str("hash", hash).Str("file_path", filePath).Msg("Started streaming download")
 
-	// Return the streaming reader that will manage cleanup
+	// Return the streaming reader that will manage cleanup and lock release
 	return &streamingReader{
 		file:       file,
 		store:      s,
 		hash:       hash,
 		mountPoint: mountPoint,
+		resizeLock: resizeLock,
 	}, nil
 }
 
-// cleanupAfterError handles cleanup when streaming setup fails.
-func (s *Store) cleanupAfterError(hash, mountPoint string) {
+// cleanupAfterErrorWithLock handles cleanup when streaming setup fails, including lock release.
+func (s *Store) cleanupAfterErrorWithLock(hash, mountPoint string, resizeLock *sync.RWMutex) {
 	shouldUnmount := s.decrementRefCount(mountPoint)
 	if shouldUnmount {
 		if unmountErr := s.unmountLoopFile(hash); unmountErr != nil {
 			log.Error().Err(unmountErr).Str("hash", hash).Msg("Failed to unmount loop file after error")
 		}
+	}
+	// Release the resize lock since we're not returning a streaming reader
+	if resizeLock != nil {
+		resizeLock.RUnlock()
 	}
 }

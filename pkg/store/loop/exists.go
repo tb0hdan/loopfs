@@ -14,8 +14,15 @@ func (s *Store) Exists(hash string) (bool, error) {
 		return false, store.InvalidHashError{Hash: hash}
 	}
 
-	// Check if loop file exists first
 	loopFilePath := s.getLoopFilePath(hash)
+
+	// Acquire read lock for resize coordination before checking existence
+	// This prevents race conditions where a resize operation temporarily renames the file
+	resizeLock := s.getResizeLock(loopFilePath)
+	resizeLock.RLock()
+	defer resizeLock.RUnlock()
+
+	// Check if loop file exists (now protected by read lock)
 	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
 		return false, nil
 	} else if err != nil {
@@ -23,7 +30,8 @@ func (s *Store) Exists(hash string) (bool, error) {
 	}
 
 	var exists bool
-	err := s.withMountedLoop(hash, func() error {
+	// Use withMountedLoopUnlocked since we already hold the resize lock
+	err := s.withMountedLoopUnlocked(hash, func() error {
 		filePath := s.getFilePath(hash)
 		if filePath == "" {
 			return store.InvalidHashError{Hash: hash}

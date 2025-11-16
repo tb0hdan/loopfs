@@ -17,8 +17,14 @@ func (s *Store) Delete(hash string) error {
 		return store.InvalidHashError{Hash: hash}
 	}
 
-	// Check if loop file exists first (avoids mount if block doesn't exist at all)
 	loopFilePath := s.getLoopFilePath(hash)
+
+	// Acquire read lock for resize coordination before checking existence
+	resizeLock := s.getResizeLock(loopFilePath)
+	resizeLock.RLock()
+	defer resizeLock.RUnlock()
+
+	// Check if loop file exists (now protected by read lock)
 	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
 		log.Debug().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found for delete")
 		return store.FileNotFoundError{Hash: hash}
@@ -26,8 +32,8 @@ func (s *Store) Delete(hash string) error {
 		return err
 	}
 
-	// Use withMountedLoop to handle mounting/unmounting and perform delete in single operation
-	return s.withMountedLoop(hash, func() error {
+	// Use withMountedLoopUnlocked since we already hold the lock
+	return s.withMountedLoopUnlocked(hash, func() error {
 		filePath, err := s.findFileInLoop(hash)
 		if err != nil {
 			// If findFileInLoop fails, it likely means file doesn't exist

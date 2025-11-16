@@ -576,3 +576,53 @@ func (s *Store) withMountedLoop(hash string, callback func() error) error {
 
 	return callback()
 }
+
+// withMountedLoopUnlocked is an internal helper that performs the same operations as withMountedLoop
+// but assumes the resize lock has already been acquired by the caller.
+// This is used to avoid double-locking in methods that need to check existence before mounting.
+// This version does NOT create the loop file if it doesn't exist.
+func (s *Store) withMountedLoopUnlocked(hash string, callback func() error) error {
+	loopFilePath := s.getLoopFilePath(hash)
+	mountPoint := s.getMountPoint(hash)
+
+	// Get per-loop-file mutex to synchronize mount operations
+	creationMutex := s.getCreationMutex(loopFilePath)
+	creationMutex.Lock()
+
+	// Double-check loop file still exists (in case it was deleted after initial check)
+	if _, err := os.Stat(loopFilePath); err != nil {
+		creationMutex.Unlock()
+		if os.IsNotExist(err) {
+			return store.FileNotFoundError{Hash: hash}
+		}
+		return err
+	}
+
+	creationMutex.Unlock()
+
+	// Clean up the creation mutex to prevent memory leaks
+	s.cleanupCreationMutex(loopFilePath)
+
+	// Increment reference count - mount only if this is the first reference
+	shouldMount := s.incrementRefCount(mountPoint)
+	if shouldMount {
+		if err := s.mountLoopFile(hash); err != nil {
+			// If mount fails, decrement the reference count we just added
+			s.decrementRefCount(mountPoint)
+			return err
+		}
+	}
+
+	// Execute the function
+	defer func() {
+		// Decrement reference count - unmount only if this was the last reference
+		shouldUnmount := s.decrementRefCount(mountPoint)
+		if shouldUnmount {
+			if err := s.unmountLoopFile(hash); err != nil {
+				log.Error().Err(err).Str("hash", hash).Msg("Failed to unmount loop file during cleanup")
+			}
+		}
+	}()
+
+	return callback()
+}
