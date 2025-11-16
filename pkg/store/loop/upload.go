@@ -74,16 +74,11 @@ func (s *Store) atomicCheckAndCreate(hash string, createFunc func() error) (bool
 		s.cleanupDeduplicationMutex(hash)
 	}()
 
-	// Pre-check: if loop file doesn't exist, file definitely doesn't exist
-	loopFilePath := s.getLoopFilePath(hash)
-	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
-		// Loop file doesn't exist, so we need to create it and the file within it
-		return true, s.withMountedLoop(hash, createFunc)
-	} else if err != nil {
-		return false, err
-	}
-
-	// Loop file exists, perform check-and-create within single mount operation
+	// Always use withMountedLoop for the check-and-create operation.
+	// This ensures proper locking and handles both cases:
+	// 1. Loop file doesn't exist: withMountedLoop will create it
+	// 2. Loop file exists: we check for existing content
+	// This eliminates the race condition where resize temporarily renames the loop file.
 	var created bool
 	err := s.withMountedLoop(hash, func() error {
 		// Check if file exists within the mounted filesystem
@@ -92,7 +87,7 @@ func (s *Store) atomicCheckAndCreate(hash string, createFunc func() error) (bool
 			return err
 		}
 		if exists {
-			log.Info().Str("hash", hash).Msg("File already exists (detected after acquiring lock)")
+			log.Info().Str("hash", hash).Msg("File already exists (proper CAS deduplication)")
 			created = false
 			return nil // File exists, will return conflict
 		}
