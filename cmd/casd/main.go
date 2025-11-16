@@ -9,6 +9,7 @@ import (
 	"loopfs/pkg/log"
 	"loopfs/pkg/server"
 	"loopfs/pkg/store/loop"
+	"loopfs/pkg/storemanager"
 )
 
 const (
@@ -45,7 +46,9 @@ func main() {
 	}
 
 	loopStore := loop.New(*storageDir, *loopFileSize)
-	cas := server.NewCASServer(*storageDir, *webDir, strings.TrimSpace(Version), loopStore)
+	// Initialize Store Manager with default buffer size (128MB)
+	storeMgr := storemanager.New(loopStore, storemanager.DefaultBufferSize)
+	cas := server.NewCASServer(*storageDir, *webDir, strings.TrimSpace(Version), storeMgr)
 
 	if err := cas.Start(*addr); err != nil {
 		log.Fatal().Err(err).Msg("Server failed to start")

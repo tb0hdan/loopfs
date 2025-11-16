@@ -12,6 +12,7 @@ import (
 
 	"loopfs/pkg/log"
 	"loopfs/pkg/store"
+	"loopfs/pkg/storemanager"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -28,15 +29,23 @@ type CASServer struct {
 	echo       *echo.Echo
 	version    string
 	store      store.Store
+	storeMgr   *storemanager.Manager
 }
 
 func NewCASServer(storageDir, webDir, version string, storeImpl store.Store) *CASServer {
+	// Check if storeImpl is actually a Store Manager
+	var storeMgr *storemanager.Manager
+	if mgr, ok := storeImpl.(*storemanager.Manager); ok {
+		storeMgr = mgr
+	}
+
 	return &CASServer{
 		storageDir: storageDir,
 		webDir:     webDir,
 		echo:       echo.New(),
 		version:    version,
 		store:      storeImpl,
+		storeMgr:   storeMgr,
 	}
 }
 

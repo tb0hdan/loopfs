@@ -28,8 +28,12 @@ func (cas *CASServer) serveSwaggerUI(ctx echo.Context) error {
 	}
 
 	ctx.Response().Header().Set(echo.HeaderContentType, echo.MIMETextHTMLCharsetUTF8)
-	ctx.Response().WriteHeader(http.StatusOK)
-	return tmpl.Execute(ctx.Response().Writer, data)
+	err = tmpl.Execute(ctx.Response().Writer, data)
+	if err != nil {
+		log.Error().Err(err).Str("template_path", tmplPath).Msg("Failed to execute template")
+		return err
+	}
+	return nil
 }
 
 func (cas *CASServer) serveSwaggerSpec(ctx echo.Context) error {

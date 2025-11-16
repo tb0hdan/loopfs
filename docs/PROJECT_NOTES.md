@@ -124,7 +124,7 @@ Files are stored in a hierarchical directory structure to avoid filesystem limit
 data/
   a1/                          # First 2 chars of hash
     ff/                        # Next 2 chars of hash
-      f0ffefb9eace...     # Full hash as filename
+      f0ffefb9eace...          # Full hash as filename
 ```
 
 This structure:

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,6 +62,7 @@ func (m *MockStore) Download(hash string) (string, error) {
 		return "", store.FileNotFoundError{Hash: hash}
 	}
 
+	hash = strings.ToLower(hash)
 	if !m.ValidateHash(hash) {
 		return "", store.InvalidHashError{Hash: hash}
 	}
@@ -92,6 +94,7 @@ func (m *MockStore) DownloadStream(hash string) (io.ReadCloser, error) {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
 
+	hash = strings.ToLower(hash)
 	if !m.ValidateHash(hash) {
 		return nil, store.InvalidHashError{Hash: hash}
 	}
@@ -111,6 +114,7 @@ func (m *MockStore) GetFileInfo(hash string) (*store.FileInfo, error) {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
 
+	hash = strings.ToLower(hash)
 	if !m.ValidateHash(hash) {
 		return nil, store.InvalidHashError{Hash: hash}
 	}
@@ -125,6 +129,7 @@ func (m *MockStore) GetFileInfo(hash string) (*store.FileInfo, error) {
 
 // Exists implementation for mock store
 func (m *MockStore) Exists(hash string) (bool, error) {
+	hash = strings.ToLower(hash)
 	if !m.ValidateHash(hash) {
 		return false, store.InvalidHashError{Hash: hash}
 	}
@@ -135,7 +140,17 @@ func (m *MockStore) Exists(hash string) (bool, error) {
 
 // ValidateHash implementation for mock store
 func (m *MockStore) ValidateHash(hash string) bool {
-	return len(hash) == 64 && isHexString(hash)
+	if len(hash) != 64 {
+		return false
+	}
+
+	for _, char := range hash {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+
+	return true
 }
 
 // Delete implementation for mock store
@@ -144,6 +159,7 @@ func (m *MockStore) Delete(hash string) error {
 		return store.FileNotFoundError{Hash: hash}
 	}
 
+	hash = strings.ToLower(hash)
 	if !m.ValidateHash(hash) {
 		return store.InvalidHashError{Hash: hash}
 	}
@@ -164,6 +180,7 @@ func (m *MockStore) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
 
+	hash = strings.ToLower(hash)
 	if !m.ValidateHash(hash) {
 		return nil, store.InvalidHashError{Hash: hash}
 	}
