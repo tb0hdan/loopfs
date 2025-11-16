@@ -40,7 +40,7 @@ func (s *LoopStoreTestSuite) TearDownSuite() {
 
 // SetupTest runs before each test
 func (s *LoopStoreTestSuite) SetupTest() {
-	s.store = New(s.tempDir, 10) // 10MB loop files
+	s.store = NewWithDefaults(s.tempDir, 10) // 10MB loop files
 }
 
 // TearDownTest runs after each test
@@ -54,7 +54,7 @@ func (s *LoopStoreTestSuite) TearDownTest() {
 
 // TestNew tests the New constructor
 func (s *LoopStoreTestSuite) TestNew() {
-	store := New("/test/path", 100)
+	store := NewWithDefaults("/test/path", 100)
 	s.NotNil(store)
 	s.Equal("/test/path", store.storageDir)
 	s.Equal(int64(100), store.loopFileSize)
@@ -431,7 +431,7 @@ func (s *LoopStoreTestSuite) TestCreateLoopFile() {
 	// Test with restricted directory (will fail in real scenario)
 	if os.Getuid() != 0 {
 		// Create store with restricted directory
-		restrictedStore := New("/root/restricted", 10)
+		restrictedStore := NewWithDefaults("/root/restricted", 10)
 		err := restrictedStore.createLoopFile(validHash)
 		s.Error(err) // Should fail due to permission denied
 	}
@@ -523,7 +523,14 @@ func (s *LoopStoreTestSuite) TestConstants() {
 	s.Equal(64, hashLength)
 	s.Equal(0750, dirPerm)
 	s.Equal("1M", blockSize)
-	s.Equal(30*time.Second, commandTimeout)
+	// Test default timeout configuration
+	defaultTimeouts := DefaultTimeoutConfig()
+	s.Equal(defaultBaseTimeoutSeconds*time.Second, defaultTimeouts.BaseCommandTimeout)
+	s.Equal(defaultDDTimeoutSeconds*time.Second, defaultTimeouts.DDTimeoutPerGB)
+	s.Equal(defaultMkfsTimeoutSeconds*time.Second, defaultTimeouts.MkfsTimeoutPerGB)
+	s.Equal(defaultRsyncTimeoutSeconds*time.Second, defaultTimeouts.RsyncTimeoutPerGB)
+	s.Equal(defaultMinLongTimeoutMins*time.Minute, defaultTimeouts.MinLongOpTimeout)
+	s.Equal(defaultMaxLongTimeoutMins*time.Minute, defaultTimeouts.MaxLongOpTimeout)
 }
 
 // TestErrorTypes tests custom error type handling
@@ -575,9 +582,9 @@ func (s *LoopStoreTestSuite) TestPathValidation() {
 func (s *LoopStoreTestSuite) TestStructureValidation() {
 	// Test store creation with different parameters
 	stores := []*Store{
-		New("/tmp/test1", 1),
-		New("/tmp/test2", 1024),
-		New("/tmp/test3", 2048),
+		NewWithDefaults("/tmp/test1", 1),
+		NewWithDefaults("/tmp/test2", 1024),
+		NewWithDefaults("/tmp/test3", 2048),
 	}
 
 	for i, store := range stores {

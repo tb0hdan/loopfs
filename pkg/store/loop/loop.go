@@ -23,13 +23,47 @@ const (
 	hashLength     = 64
 	dirPerm        = 0750
 	blockSize      = "1M"
-	commandTimeout = 30 * time.Second // Timeout for exec commands
+	// Size conversion constants.
+	bytesToKB            = 1024
+	bytesToMB            = 1024 * 1024
+	bytesToGB            = 1024 * 1024 * 1024
+	dataEstimationFactor = 2 // Factor for estimating actual data size from filesystem size
+	// Default timeout values.
+	defaultBaseTimeoutSeconds  = 30
+	defaultDDTimeoutSeconds    = 60
+	defaultMkfsTimeoutSeconds  = 20
+	defaultRsyncTimeoutSeconds = 120
+	defaultMinLongTimeoutMins  = 5
+	defaultMaxLongTimeoutMins  = 30
 )
+
+// TimeoutConfig holds configurable timeout settings for loop operations.
+type TimeoutConfig struct {
+	BaseCommandTimeout time.Duration // Timeout for fast operations (mount, unmount, stat)
+	DDTimeoutPerGB     time.Duration // Timeout per GB for dd operations
+	MkfsTimeoutPerGB   time.Duration // Timeout per GB for mkfs operations
+	RsyncTimeoutPerGB  time.Duration // Timeout per GB for rsync operations
+	MinLongOpTimeout   time.Duration // Minimum timeout for long operations
+	MaxLongOpTimeout   time.Duration // Maximum timeout for long operations
+}
+
+// DefaultTimeoutConfig returns the default timeout configuration.
+func DefaultTimeoutConfig() TimeoutConfig {
+	return TimeoutConfig{
+		BaseCommandTimeout: defaultBaseTimeoutSeconds * time.Second,    // Timeout for fast operations (mount, unmount, stat)
+		DDTimeoutPerGB:     defaultDDTimeoutSeconds * time.Second,      // Timeout per GB for dd operations
+		MkfsTimeoutPerGB:   defaultMkfsTimeoutSeconds * time.Second,    // Timeout per GB for mkfs operations
+		RsyncTimeoutPerGB:  defaultRsyncTimeoutSeconds * time.Second,   // Timeout per GB for rsync operations
+		MinLongOpTimeout:   defaultMinLongTimeoutMins * time.Minute,    // Minimum timeout for long operations
+		MaxLongOpTimeout:   defaultMaxLongTimeoutMins * time.Minute,    // Maximum timeout for long operations
+	}
+}
 
 // Store implements the store.Store interface for Loop CAS storage.
 type Store struct {
 	storageDir       string
 	loopFileSize     int64
+	timeouts         TimeoutConfig
 	mountMutex       sync.Mutex
 	creationMutex    sync.Mutex
 	creationLocks    map[string]*sync.Mutex
@@ -39,15 +73,56 @@ type Store struct {
 	deduplicationLocks map[string]*sync.Mutex
 }
 
-// New creates a new Loop store with the specified storage directory and loop file size.
-func New(storageDir string, loopFileSize int64) *Store {
+// New creates a new Loop store with the specified storage directory, loop file size, and timeout configuration.
+func New(storageDir string, loopFileSize int64, timeouts TimeoutConfig) *Store {
 	return &Store{
 		storageDir:         storageDir,
 		loopFileSize:       loopFileSize,
+		timeouts:           timeouts,
 		creationLocks:      make(map[string]*sync.Mutex),
 		refCounts:          make(map[string]int),
 		deduplicationLocks: make(map[string]*sync.Mutex),
 	}
+}
+
+// NewWithDefaults creates a new Loop store with default timeout configuration.
+func NewWithDefaults(storageDir string, loopFileSize int64) *Store {
+	return New(storageDir, loopFileSize, DefaultTimeoutConfig())
+}
+
+// calculateTimeout calculates appropriate timeout for operations based on file size and operation type.
+func (s *Store) calculateTimeout(sizeInBytes int64, timeoutPerGB time.Duration) time.Duration {
+	if sizeInBytes <= 0 {
+		return s.timeouts.MinLongOpTimeout
+	}
+
+	sizeInGB := float64(sizeInBytes) / bytesToGB
+	timeout := time.Duration(sizeInGB * float64(timeoutPerGB))
+
+	// Ensure timeout is within reasonable bounds
+	if timeout < s.timeouts.MinLongOpTimeout {
+		timeout = s.timeouts.MinLongOpTimeout
+	}
+	if timeout > s.timeouts.MaxLongOpTimeout {
+		timeout = s.timeouts.MaxLongOpTimeout
+	}
+
+	return timeout
+}
+
+// getDDTimeout returns appropriate timeout for dd operations based on file size.
+func (s *Store) getDDTimeout(sizeInBytes int64) time.Duration {
+	return s.calculateTimeout(sizeInBytes, s.timeouts.DDTimeoutPerGB)
+}
+
+// getMkfsTimeout returns appropriate timeout for mkfs operations based on file size.
+func (s *Store) getMkfsTimeout(sizeInBytes int64) time.Duration {
+	return s.calculateTimeout(sizeInBytes, s.timeouts.MkfsTimeoutPerGB)
+}
+
+// getRsyncTimeout returns appropriate timeout for rsync operations based on estimated data size.
+func (s *Store) getRsyncTimeout(sizeInBytes int64) time.Duration {
+	return s.calculateTimeout(sizeInBytes, s.timeouts.RsyncTimeoutPerGB)
 }
 
 // getLoopFilePath returns the loop file path for a given hash in hierarchical structure.
@@ -200,7 +275,7 @@ func (s *Store) findFileInLoop(hash string) (string, error) {
 // getUsedLoops checks the number of currently used loop devices and returns an error
 // if the count exceeds maxLoopDevices.
 func (s *Store) getUsedLoops() error {
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.BaseCommandTimeout)
 	defer cancel()
 
 	// Run losetup -l to get the list of loop devices
@@ -262,33 +337,57 @@ func (s *Store) createLoopFile(hash string) error {
 		return err
 	}
 
-	// Create the loop file
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	// Calculate file size in bytes for timeout calculation
+	fileSizeBytes := s.loopFileSize * bytesToMB // loopFileSize is in MB
+
+	// Create the loop file with size-based timeout
+	ddTimeout := s.getDDTimeout(fileSizeBytes)
+	ctx, cancel := context.WithTimeout(context.Background(), ddTimeout)
 	defer cancel()
 	//nolint:gosec // loopFilePath is constructed from validated hash, not user input
 	cmd := exec.CommandContext(ctx, "dd", "if=/dev/zero",
 		"of="+loopFilePath,
 		"bs="+blockSize,
 		fmt.Sprintf("count=%d", s.loopFileSize))
+
+	log.Debug().
+		Str("loop_file", loopFilePath).
+		Int64("size_mb", s.loopFileSize).
+		Dur("timeout", ddTimeout).
+		Msg("Creating loop file with calculated timeout")
+
 	if err := cmd.Run(); err != nil {
-		log.Error().Err(err).Str("loop_file", loopFilePath).Msg("Failed to create loop file")
+		log.Error().Err(err).Str("loop_file", loopFilePath).Dur("timeout", ddTimeout).Msg("Failed to create loop file")
 		return err
 	}
 
-	// Format with ext4
-	ctx2, cancel2 := context.WithTimeout(context.Background(), commandTimeout)
+	// Format with ext4 using size-based timeout
+	mkfsTimeout := s.getMkfsTimeout(fileSizeBytes)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), mkfsTimeout)
 	defer cancel2()
 	//nolint:gosec // loopFilePath is constructed from validated hash, not user input
 	cmd = exec.CommandContext(ctx2, "mkfs.ext4", "-q", loopFilePath)
+
+	log.Debug().
+		Str("loop_file", loopFilePath).
+		Int64("size_mb", s.loopFileSize).
+		Dur("timeout", mkfsTimeout).
+		Msg("Formatting loop file with calculated timeout")
+
 	if err := cmd.Run(); err != nil {
-		log.Error().Err(err).Str("loop_file", loopFilePath).Msg("Failed to format loop file")
+		log.Error().Err(err).Str("loop_file", loopFilePath).Dur("timeout", mkfsTimeout).Msg("Failed to format loop file")
 		if removeErr := os.Remove(loopFilePath); removeErr != nil {
 			log.Error().Err(removeErr).Str("loop_file", loopFilePath).Msg("Failed to remove loop file during cleanup")
 		}
 		return err
 	}
 
-	log.Info().Str("loop_file", loopFilePath).Msg("Loop file created and formatted")
+	log.Info().
+		Str("loop_file", loopFilePath).
+		Int64("size_mb", s.loopFileSize).
+		Dur("dd_timeout", ddTimeout).
+		Dur("mkfs_timeout", mkfsTimeout).
+		Msg("Loop file created and formatted")
 	return nil
 }
 
@@ -317,8 +416,8 @@ func (s *Store) mountLoopFile(hash string) error {
 		return nil
 	}
 
-	// Mount the loop file
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	// Mount the loop file using base timeout (mount is fast)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.BaseCommandTimeout)
 	defer cancel()
 	//nolint:gosec // loopFilePath and mountPoint are constructed from validated hash, not user input
 	cmd := exec.CommandContext(ctx, "mount", "-o", "loop", loopFilePath, mountPoint)
@@ -344,8 +443,8 @@ func (s *Store) unmountLoopFile(hash string) error {
 		return nil
 	}
 
-	// Unmount
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	// Unmount using base timeout (unmount is fast)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.BaseCommandTimeout)
 	defer cancel()
 	//nolint:gosec // mountPoint is constructed from validated hash, not user input
 	cmd := exec.CommandContext(ctx, "umount", mountPoint)
@@ -360,7 +459,7 @@ func (s *Store) unmountLoopFile(hash string) error {
 
 // isMounted checks if a mount point is currently mounted.
 func (s *Store) isMounted(mountPoint string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.BaseCommandTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "mountpoint", "-q", mountPoint)
 	return cmd.Run() == nil

@@ -37,7 +37,7 @@ func (s *ExistsTestSuite) TearDownSuite() {
 
 // SetupTest runs before each test
 func (s *ExistsTestSuite) SetupTest() {
-	s.store = New(s.tempDir, 10) // 10MB loop files
+	s.store = NewWithDefaults(s.tempDir, 10) // 10MB loop files
 }
 
 // TearDownTest runs after each test
@@ -94,7 +94,7 @@ func (s *ExistsTestSuite) TestExistsStatError() {
 		s.NoError(err)
 
 		// Change the store to point to the restricted directory
-		restrictedStore := New(restrictedDir, 10)
+		restrictedStore := NewWithDefaults(restrictedDir, 10)
 
 		exists, err := restrictedStore.Exists(s.testHash)
 		s.Error(err)

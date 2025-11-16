@@ -37,7 +37,7 @@ func (s *DeleteTestSuite) TearDownSuite() {
 
 // SetupTest runs before each test
 func (s *DeleteTestSuite) SetupTest() {
-	s.store = New(s.tempDir, 10) // 10MB loop files
+	s.store = NewWithDefaults(s.tempDir, 10) // 10MB loop files
 }
 
 // TearDownTest runs after each test
@@ -104,7 +104,7 @@ func (s *DeleteTestSuite) TestDeleteExistsError() {
 		err := os.MkdirAll(restrictedDir, 0000) // No permissions
 		s.NoError(err)
 
-		restrictedStore := New(restrictedDir, 10)
+		restrictedStore := NewWithDefaults(restrictedDir, 10)
 
 		err = restrictedStore.Delete(s.testHash)
 		s.Error(err)

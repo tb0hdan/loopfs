@@ -37,7 +37,7 @@ func (s *GetDiskUsageTestSuite) TearDownSuite() {
 
 // SetupTest runs before each test
 func (s *GetDiskUsageTestSuite) SetupTest() {
-	s.store = New(s.tempDir, 10) // 10MB loop files
+	s.store = NewWithDefaults(s.tempDir, 10) // 10MB loop files
 }
 
 // TearDownTest runs after each test
@@ -106,7 +106,7 @@ func (s *GetDiskUsageTestSuite) TestGetDiskUsageStatError() {
 		err := os.MkdirAll(restrictedDir, 0000) // No permissions
 		s.NoError(err)
 
-		restrictedStore := New(restrictedDir, 10)
+		restrictedStore := NewWithDefaults(restrictedDir, 10)
 
 		diskUsage, err := restrictedStore.GetDiskUsage(s.testHash)
 		s.Error(err)

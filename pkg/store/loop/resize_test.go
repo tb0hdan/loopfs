@@ -35,7 +35,7 @@ func (s *ResizeTestSuite) TearDownSuite() {
 
 // SetupTest runs before each test
 func (s *ResizeTestSuite) SetupTest() {
-	s.store = New(s.tempDir, 10) // 10MB loop files
+	s.store = NewWithDefaults(s.tempDir, 10) // 10MB loop files
 }
 
 // TearDownTest runs after each test
@@ -132,7 +132,9 @@ func (s *ResizeTestSuite) TestSyncDataBetweenLoops() {
 	err = os.WriteFile(testFile, []byte("test content"), 0644)
 	s.NoError(err)
 
-	err = s.store.syncDataBetweenLoops(sourceDir, destDir)
+	// Use 1GB as estimated data size for test
+	estimatedDataSize := int64(1024 * 1024 * 1024)
+	err = s.store.syncDataBetweenLoops(sourceDir, destDir, estimatedDataSize)
 	if err != nil {
 		// rsync might not be available or might fail in test environment
 		s.T().Logf("syncDataBetweenLoops failed (might be expected): %v", err)
@@ -152,7 +154,9 @@ func (s *ResizeTestSuite) TestSyncDataBetweenLoopsInvalidSource() {
 	err := os.MkdirAll(validDest, dirPerm)
 	s.NoError(err)
 
-	err = s.store.syncDataBetweenLoops(invalidSource, validDest)
+	// Use 1GB as estimated data size for test
+	estimatedDataSize := int64(1024 * 1024 * 1024)
+	err = s.store.syncDataBetweenLoops(invalidSource, validDest, estimatedDataSize)
 	s.Error(err)
 	s.Contains(err.Error(), "failed to rsync data")
 }
@@ -381,7 +385,6 @@ func (s *ResizeTestSuite) TestResizeBlockZeroSize() {
 // TestResizeConstants tests resize-related constants
 func (s *ResizeTestSuite) TestResizeConstants() {
 	s.Equal(1024*1024, bytesPerMB)
-	s.Equal(2, rsyncTimeoutMult)
 }
 
 // TestMountNewLoopFileCreateDirError tests mountNewLoopFile directory creation failure
@@ -428,9 +431,11 @@ func (s *ResizeTestSuite) TestSyncDataBetweenLoopsTimeout() {
 	err = os.MkdirAll(destDir, dirPerm)
 	s.NoError(err)
 
-	// The timeout is commandTimeout * rsyncTimeoutMult
+	// The timeout is now calculated based on data size
 	// We can't easily test actual timeout, but we can verify the function runs
-	err = s.store.syncDataBetweenLoops(sourceDir, destDir)
+	// Use 1GB as estimated data size for test
+	estimatedDataSize := int64(1024 * 1024 * 1024)
+	err = s.store.syncDataBetweenLoops(sourceDir, destDir, estimatedDataSize)
 	// May succeed or fail depending on rsync availability
 	if err != nil {
 		s.T().Logf("syncDataBetweenLoops error (may be expected): %v", err)

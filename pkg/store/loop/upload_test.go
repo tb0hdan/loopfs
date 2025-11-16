@@ -41,7 +41,7 @@ func (s *UploadTestSuite) TearDownSuite() {
 
 // SetupTest runs before each test
 func (s *UploadTestSuite) SetupTest() {
-	s.store = New(s.tempDir, 10) // 10MB loop files
+	s.store = NewWithDefaults(s.tempDir, 10) // 10MB loop files
 }
 
 // TearDownTest runs after each test

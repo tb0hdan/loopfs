@@ -14,7 +14,7 @@ type ValidateHashTestSuite struct {
 
 // SetupTest runs before each test
 func (s *ValidateHashTestSuite) SetupTest() {
-	s.store = New("/tmp/test", 10) // temp directory and 10MB loop files
+	s.store = NewWithDefaults("/tmp/test", 10) // temp directory and 10MB loop files
 }
 
 // TestValidateHashValid tests ValidateHash with valid hashes

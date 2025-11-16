@@ -11,33 +11,51 @@ import (
 
 const (
 	// Constants for resize operations.
-	bytesPerMB       = 1024 * 1024
-	rsyncTimeoutMult = 2 // Multiplier for rsync timeout
+	bytesPerMB = 1024 * 1024
 )
 
 // createNewLoopFile creates and formats a new loop file.
 func (s *Store) createNewLoopFile(newLoopFilePath string, sizeInMB int64) error {
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	// Calculate file size in bytes for timeout calculation
+	fileSizeBytes := sizeInMB * bytesToMB
+
+	// Create the new loop file with size-based timeout
+	ddTimeout := s.getDDTimeout(fileSizeBytes)
+	ctx, cancel := context.WithTimeout(context.Background(), ddTimeout)
 	defer cancel()
 
-	// Create the new loop file
 	//nolint:gosec // newLoopFilePath is constructed from validated hash, not user input
 	cmd := exec.CommandContext(ctx, "dd", "if=/dev/zero",
 		"of="+newLoopFilePath,
 		"bs="+blockSize,
 		fmt.Sprintf("count=%d", sizeInMB))
+
+	log.Debug().
+		Str("new_loop_file", newLoopFilePath).
+		Int64("size_mb", sizeInMB).
+		Dur("timeout", ddTimeout).
+		Msg("Creating new loop file for resize with calculated timeout")
+
 	if err := cmd.Run(); err != nil {
-		log.Error().Err(err).Str("new_loop_file", newLoopFilePath).Msg("Failed to create new loop file")
+		log.Error().Err(err).Str("new_loop_file", newLoopFilePath).Dur("timeout", ddTimeout).Msg("Failed to create new loop file")
 		return fmt.Errorf("failed to create new loop file: %w", err)
 	}
 
-	// Format the new loop file with ext4
-	ctx2, cancel2 := context.WithTimeout(context.Background(), commandTimeout)
+	// Format the new loop file with ext4 using size-based timeout
+	mkfsTimeout := s.getMkfsTimeout(fileSizeBytes)
+	ctx2, cancel2 := context.WithTimeout(context.Background(), mkfsTimeout)
 	defer cancel2()
 	//nolint:gosec // newLoopFilePath is constructed from validated hash, not user input
 	cmd = exec.CommandContext(ctx2, "mkfs.ext4", "-q", newLoopFilePath)
+
+	log.Debug().
+		Str("new_loop_file", newLoopFilePath).
+		Int64("size_mb", sizeInMB).
+		Dur("timeout", mkfsTimeout).
+		Msg("Formatting new loop file for resize with calculated timeout")
+
 	if err := cmd.Run(); err != nil {
-		log.Error().Err(err).Str("new_loop_file", newLoopFilePath).Msg("Failed to format new loop file")
+		log.Error().Err(err).Str("new_loop_file", newLoopFilePath).Dur("timeout", mkfsTimeout).Msg("Failed to format new loop file")
 		return fmt.Errorf("failed to format new loop file: %w", err)
 	}
 
@@ -52,8 +70,8 @@ func (s *Store) mountNewLoopFile(newLoopFilePath, newMountPoint string) error {
 		return fmt.Errorf("failed to create new mount point: %w", err)
 	}
 
-	// Mount the new loop file
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	// Mount the new loop file using base timeout (mount is fast)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.BaseCommandTimeout)
 	defer cancel()
 	//nolint:gosec // newLoopFilePath and newMountPoint are constructed from validated hash, not user input
 	cmd := exec.CommandContext(ctx, "mount", "-o", "loop", newLoopFilePath, newMountPoint)
@@ -67,29 +85,45 @@ func (s *Store) mountNewLoopFile(newLoopFilePath, newMountPoint string) error {
 }
 
 // syncDataBetweenLoops uses rsync to copy data between mounted loop filesystems.
-func (s *Store) syncDataBetweenLoops(mountPoint, newMountPoint string) error {
+func (s *Store) syncDataBetweenLoops(mountPoint, newMountPoint string, estimatedDataSize int64) error {
 	// Add trailing slashes to ensure directory contents are copied
 	sourcePath := mountPoint + "/"
 	destPath := newMountPoint + "/"
 
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout*rsyncTimeoutMult)
+	// Use intelligent timeout based on estimated data size
+	rsyncTimeout := s.getRsyncTimeout(estimatedDataSize)
+	ctx, cancel := context.WithTimeout(context.Background(), rsyncTimeout)
 	defer cancel()
+
 	//nolint:gosec // sourcePath and destPath are constructed from validated hash, not user input
 	cmd := exec.CommandContext(ctx, "rsync", "-avuz", sourcePath, destPath)
+
+	log.Debug().
+		Str("source", sourcePath).
+		Str("dest", destPath).
+		Int64("estimated_data_size_bytes", estimatedDataSize).
+		Dur("timeout", rsyncTimeout).
+		Msg("Starting rsync with calculated timeout")
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Error().Err(err).Str("source", sourcePath).Str("dest", destPath).
-			Str("output", string(output)).Msg("Failed to rsync data to new loop file")
+			Str("output", string(output)).Dur("timeout", rsyncTimeout).Msg("Failed to rsync data to new loop file")
 		return fmt.Errorf("failed to rsync data: %w (output: %s)", err, string(output))
 	}
 
-	log.Debug().Str("source", sourcePath).Str("dest", destPath).Msg("Data synced successfully")
+	log.Info().
+		Str("source", sourcePath).
+		Str("dest", destPath).
+		Int64("estimated_data_size_bytes", estimatedDataSize).
+		Dur("timeout", rsyncTimeout).
+		Msg("Data synced successfully")
 	return nil
 }
 
 // unmountLoopFile unmounts a specific loop file.
 func (s *Store) unmountSpecificLoopFile(mountPoint string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.BaseCommandTimeout)
 	defer cancel()
 	//nolint:gosec // mountPoint is constructed from validated hash, not user input
 	cmd := exec.CommandContext(ctx, "umount", mountPoint)
@@ -219,8 +253,22 @@ func (s *Store) performResizeOperations(hash, mountPoint, loopFilePath, newLoopF
 		}
 	}()
 
-	// Step 4: Sync data between loops
-	if err := s.syncDataBetweenLoops(mountPoint, newMountPoint); err != nil {
+	// Step 4: Estimate data size for timeout calculation
+	// For resizing, we estimate based on the current loop file size since we're copying all data
+	var estimatedDataSize int64
+	if fileInfo, err := os.Stat(loopFilePath); err == nil {
+		// Use 50% of current file size as rough estimate for actual data (ext4 overhead consideration)
+		estimatedDataSize = fileInfo.Size() / dataEstimationFactor
+	} else {
+		// Fallback: use the configured loop file size as estimate
+		estimatedDataSize = s.loopFileSize * bytesPerMB / dataEstimationFactor
+		log.Warn().Err(err).Str("loop_file", loopFilePath).
+			Int64("fallback_estimate_bytes", estimatedDataSize).
+			Msg("Could not stat loop file for data size estimation, using fallback")
+	}
+
+	// Step 4: Sync data between loops with intelligent timeout
+	if err := s.syncDataBetweenLoops(mountPoint, newMountPoint, estimatedDataSize); err != nil {
 		return err
 	}
 

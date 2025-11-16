@@ -28,6 +28,16 @@ func main() {
 	webDir := flag.String("web", "web", "Web assets directory path")
 	addr := flag.String("addr", "127.0.0.1:8080", "Server addr")
 	loopFileSize := flag.Int64("loop-size", oneGB, "Loop file size in megabytes (defaults to 1024)")
+
+	// Timeout configuration flags - use default values from the loop package
+	defaultTimeouts := loop.DefaultTimeoutConfig()
+	baseTimeout := flag.Duration("base-timeout", defaultTimeouts.BaseCommandTimeout, "Timeout for fast operations (mount, unmount, stat)")
+	ddTimeoutPerGB := flag.Duration("dd-timeout-per-gb", defaultTimeouts.DDTimeoutPerGB, "Timeout per GB for dd operations")
+	mkfsTimeoutPerGB := flag.Duration("mkfs-timeout-per-gb", defaultTimeouts.MkfsTimeoutPerGB, "Timeout per GB for mkfs operations")
+	rsyncTimeoutPerGB := flag.Duration("rsync-timeout-per-gb", defaultTimeouts.RsyncTimeoutPerGB, "Timeout per GB for rsync operations")
+	minLongTimeout := flag.Duration("min-long-timeout", defaultTimeouts.MinLongOpTimeout, "Minimum timeout for long operations")
+	maxLongTimeout := flag.Duration("max-long-timeout", defaultTimeouts.MaxLongOpTimeout, "Maximum timeout for long operations")
+
 	flag.Parse()
 
 	// Check if running as root
@@ -45,7 +55,17 @@ func main() {
 		log.Fatal().Str("web_dir", *webDir).Msg("Web directory does not exist")
 	}
 
-	loopStore := loop.New(*storageDir, *loopFileSize)
+	// Create timeout configuration from command-line flags
+	timeoutConfig := loop.TimeoutConfig{
+		BaseCommandTimeout: *baseTimeout,
+		DDTimeoutPerGB:     *ddTimeoutPerGB,
+		MkfsTimeoutPerGB:   *mkfsTimeoutPerGB,
+		RsyncTimeoutPerGB:  *rsyncTimeoutPerGB,
+		MinLongOpTimeout:   *minLongTimeout,
+		MaxLongOpTimeout:   *maxLongTimeout,
+	}
+
+	loopStore := loop.New(*storageDir, *loopFileSize, timeoutConfig)
 	// Initialize Store Manager with default buffer size (128MB)
 	storeMgr := storemanager.New(loopStore, storemanager.DefaultBufferSize)
 	cas := server.NewCASServer(*storageDir, *webDir, strings.TrimSpace(Version), storeMgr)
