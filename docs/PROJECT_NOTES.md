@@ -89,12 +89,29 @@ LoopFS/
   - 404: Not found - file doesn't exist
 
 ### 4. GET `/file/{hash}/info` - Get File Metadata
-- **Description**: Returns metadata about a stored file
+- **Description**: Returns metadata about a stored file including disk usage information
 - **Parameters**:
   - `hash`: 64-character hexadecimal SHA256 hash
-- **Response**: JSON with hash, size, and creation timestamp
+- **Response**: JSON with hash, size, creation timestamp, and loop filesystem disk usage
+- **Response Fields**:
+  - `hash`: SHA256 hash of the file
+  - `size`: File size in bytes
+  - `created_at`: File creation/modification timestamp
+  - `space_used`: Space used in the file's loop filesystem (bytes)
+  - `space_available`: Space available in the file's loop filesystem (bytes)
 - **Status Codes**:
   - 200: Success - returns metadata
+  - 400: Bad request - invalid hash format
+  - 404: Not found - file doesn't exist
+  - 500: Internal server error
+
+### 5. DELETE `/file/{hash}/delete` - Delete File
+- **Description**: Deletes a file from the CAS storage
+- **Parameters**:
+  - `hash`: 64-character hexadecimal SHA256 hash
+- **Response**: JSON with success message and hash
+- **Status Codes**:
+  - 200: Success - file deleted
   - 400: Bad request - invalid hash format
   - 404: Not found - file doesn't exist
   - 500: Internal server error
@@ -107,7 +124,7 @@ Files are stored in a hierarchical directory structure to avoid filesystem limit
 data/
   a1/                          # First 2 chars of hash
     ff/                        # Next 2 chars of hash
-      a1fff0ffefb9eace...     # Full hash as filename
+      f0ffefb9eace...     # Full hash as filename
 ```
 
 This structure:
@@ -250,15 +267,29 @@ curl http://localhost:8080/file/abc123.../download > downloaded.pdf
 3. **Get file information**:
 ```bash
 curl http://localhost:8080/file/abc123.../info
-# Returns: {"hash":"abc123...","size":1024,"created_at":"2025-11-15T12:00:00Z"}
+# Returns: {
+#   "hash":"abc123...",
+#   "size":1024,
+#   "created_at":"2025-11-15T12:00:00Z",
+#   "space_used":1073741824,
+#   "space_available":10737418240
+# }
 ```
 
-4. **View API Documentation**:
+4. **Delete a file**:
+```bash
+curl -X DELETE http://localhost:8080/file/abc123.../delete
+# Returns: {"message":"File deleted successfully","hash":"abc123..."}
+```
+
+5. **View API Documentation**:
 Open http://localhost:8080 in a web browser
 
-## Current Implementation Status (Updated November 15, 2025)
+## Current Implementation Status (Updated November 16, 2025)
 
-### Latest Architectural Changes (Commits 9c033cc - "It works!")
+### Project Version: v1.0.1
+
+### Latest Architectural Changes (Commits 18a6bba - "Another bump")
 
 The project has been completely rewritten to implement a **loop filesystem-based storage** approach:
 
@@ -266,31 +297,37 @@ The project has been completely rewritten to implement a **loop filesystem-based
 
 **Key Innovation**: LoopFS now uses **Linux loop filesystems** for content storage instead of traditional file storage. This provides:
 
-1. **Loop File Organization**: Each content hash creates dedicated ext4 loop filesystems
-   - Hash `abcdef123...` → `/data/cas/ab/cd/loop.img` (1GB ext4 loop file)
+1. **Loop File Organization**: Each hash prefix creates a shared ext4 loop filesystem
+   - Hash `abcdef123...` → `/data/cas/ab/cd/loop.img` (default 1GB ext4 loop file)
+   - Multiple files can share the same loop filesystem based on hash prefix
    - Files stored inside mounted loop filesystem with hierarchical structure
-   - Automatic mount/unmount during operations with mutex protection
+   - Automatic mount/unmount during operations with reference counting
 
 2. **Advanced Hash Partitioning**: Multi-level directory structure:
    - **Loop Level**: First 4 chars (`ab/cd`) determine loop file location
-   - **Internal Level**: Next 4 chars (`ef/12`) create subdirs inside loop filesystem
-   - **File Level**: Remaining chars (`3...`) become actual filename
+   - **Mount Point**: Next 2 chars (`ef`) used for mount point naming (`loopef`)
+   - **Internal Level**: Chars 5-8 (`ef/12`) create subdirs inside loop filesystem
+   - **File Level**: Remaining chars (from position 9 onwards) become actual filename
 
 3. **Dynamic Filesystem Management**:
    - Loop files created on-demand using `dd` + `mkfs.ext4`
    - Automatic mounting/unmounting with `mount -o loop`
-   - Mutex-protected mount operations to prevent race conditions
+   - Reference counting for concurrent operations on same loop file
+   - Per-loop-file creation mutex to prevent race conditions
    - Mount point validation with `mountpoint` command
+   - Cleanup of creation mutexes after successful creation
 
 #### Code Architecture Improvements
 
 1. **Modular Loop Implementation** (`pkg/store/loop/`):
-   - **`loop.go`**: Core loop filesystem management and mounting logic
+   - **`loop.go`**: Core loop filesystem management with reference counting and mounting logic
    - **`upload.go`**: File upload with loop mounting and hierarchical storage
    - **`download.go`**: Temporary file extraction from mounted loops
+   - **`delete.go`**: File deletion from loop filesystems
    - **`exists.go`**: Loop file existence checking
-   - **`get_file_info.go`**: Metadata retrieval from loop filesystems
+   - **`get_file_info.go`**: Metadata retrieval including disk usage from loop filesystems
    - **`validate_hash.go`**: SHA256 hash validation
+   - **`disk_usage.go`**: Disk usage statistics for loop filesystems
 
 2. **Enhanced Server Requirements**:
    - **Root Access Required**: Must run as root for loop mounting operations
@@ -305,25 +342,47 @@ The project has been completely rewritten to implement a **loop filesystem-based
 
 #### Technical Implementation Details
 
-- **Loop File Creation**: `dd if=/dev/zero of=loop.img bs=1M count=1024; mkfs.ext4 -q loop.img`
+- **Loop File Creation**: `dd if=/dev/zero of=loop.img bs=1M count=<size>; mkfs.ext4 -q loop.img`
 - **Mount Operations**: `mount -o loop /path/to/loop.img /mount/point`
-- **File Storage**: Files stored as `/mount/point/ef/12/3456789abcdef...` within loop filesystem
-- **Cleanup**: Automatic unmounting after operations with proper error handling
-- **Concurrency**: Mutex protection for all mount/unmount operations
+- **File Storage**: Files stored as `/mount/point/ef/12/<remaining_hash>` within loop filesystem
+- **Cleanup**: Reference-counted unmounting after operations with proper error handling
+- **Concurrency Protection**:
+  - Global mount mutex for mount/unmount operations
+  - Per-loop-file creation mutex to prevent duplicate creation
+  - Reference counting for managing concurrent access to same loop file
+  - Creation mutex cleanup after successful loop file creation
+- **Command Timeout**: 30-second timeout for all exec commands (dd, mkfs.ext4, mount, umount)
+- **Constants**:
+  - `maxLoopDevices`: 65535 (Linux kernel limit)
+  - `minHashLength`: 4 (minimum for loop file path)
+  - `minHashSubDir`: 8 (minimum for subdirectory structure)
+  - `hashLength`: 64 (standard SHA256 hex length)
+  - `dirPerm`: 0750 (directory permissions)
+  - `blockSize`: 1M (dd block size)
 
 ### Testing and Quality Assurance
 
 - **Test Coverage**: Currently 0.0% - tests need implementation for loop filesystem operations
 - **Build System**: Makefile supports `build`, `test`, `lint`, and `tools` targets
-- **Binary Output**: Compiled to `build/casd` (15MB executable)
-- **Dependencies**: Go 1.25.4, Echo v4, Zerolog, standard Linux utilities
+- **Binary Output**: Compiled to `build/casd` (approximately 15MB executable)
+- **Dependencies**: Go 1.22.3, Echo v4.12.0, Zerolog v1.33.0, standard Linux utilities
+- **Linting**: Uses golangci-lint for code quality checks
 
 ### Operational Requirements
 
 - **Operating System**: Linux only (requires loop device support)
+- **Kernel Requirements**: Linux kernel with loop device support enabled
 - **Privileges**: Must run as root (loop mounting requires elevated privileges)
-- **Disk Space**: Each hash prefix combination can use up to 1GB (configurable)
-- **Mount Points**: Dynamic mount point creation under `/data/cas/loop*/`
+- **Disk Space**: Each hash prefix combination (first 4 chars) creates a loop file (default 1GB, configurable)
+- **Mount Points**: Dynamic mount point creation under `/data/cas/ab/cd/loopef/`
+- **File Descriptors**: Adequate ulimit for handling multiple mounted filesystems
+- **System Commands Required**:
+  - `dd`: For creating loop files
+  - `mkfs.ext4`: For formatting loop filesystems
+  - `mount`: For mounting loop filesystems
+  - `umount`: For unmounting loop filesystems
+  - `mountpoint`: For checking mount status
+  - `df`: For disk usage statistics
 
 ## Security Considerations
 
@@ -333,18 +392,27 @@ The project has been completely rewritten to implement a **loop filesystem-based
 - Content-based addressing ensures data integrity
 - Atomic file operations prevent corruption during uploads
 - Temporary file handling with proper cleanup
+- Loop filesystem isolation provides additional security boundary
+- Mount operations require root privileges (security through privilege separation)
+- Input validation with gosec linting for command injection prevention
+- Directory permissions set to 0750 for restricted access
 
 ## Future Enhancements
 
 Potential improvements for the CAS server:
 
 1. **Authentication & Authorization**: Add user authentication and access control
-2. **Compression**: Automatic compression for stored files
-3. **Replication**: Support for distributed storage and replication
-4. **Garbage Collection**: Remove orphaned files not referenced by any index
+2. **Compression**: Automatic compression for stored files within loop filesystems
+3. **Replication**: Support for distributed storage and replication of loop files
+4. **Garbage Collection**: Clean up empty or orphaned loop filesystems
 5. **Metadata Storage**: Store additional metadata in a database
 6. **Batch Operations**: Support for uploading/downloading multiple files
 7. **WebSocket Support**: Real-time notifications for file uploads
 8. **Rate Limiting**: Prevent abuse through request throttling
 9. **HTTPS Support**: TLS encryption for secure transfers
 10. **Metrics & Monitoring**: Prometheus metrics for monitoring
+11. **Loop File Management**: Dynamic resizing of loop filesystems based on usage
+12. **Alternative Filesystems**: Support for other filesystems (btrfs, xfs) besides ext4
+13. **Non-root Operation**: Investigate user namespace mounting for non-root operation
+14. **Performance Optimization**: Implement caching layer for frequently accessed files
+15. **Backup & Recovery**: Automated backup of loop filesystems
