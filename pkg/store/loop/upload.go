@@ -236,12 +236,6 @@ func (s *Store) saveFileFromPathWithinMountedLoop(hash string, sourcePath string
 	return nil
 }
 
-// saveFileToLoop saves the temporary file to the loop filesystem.
-// This is a wrapper that maintains backward compatibility.
-//nolint:unused // Used in tests
-func (s *Store) saveFileToLoop(hash string, tempFile *os.File) error {
-	return s.saveFileWithinMountedLoop(hash, tempFile)
-}
 
 // UploadWithHash stores a file using a pre-calculated hash and temp file path.
 // This method is more efficient as it avoids redundant hashing and temp file creation.
@@ -270,12 +264,6 @@ func (s *Store) UploadWithHash(tempFilePath, hash, filename string) (*store.Uplo
 	return &store.UploadResult{Hash: hash}, nil
 }
 
-// saveFileToLoopFromPath saves a file from the given path to the loop filesystem.
-// This is a wrapper that maintains backward compatibility.
-//nolint:unused // Maintained for backward compatibility
-func (s *Store) saveFileToLoopFromPath(hash string, sourcePath string) error {
-	return s.saveFileFromPathWithinMountedLoop(hash, sourcePath)
-}
 
 // cleanupTempFile closes and removes the temporary file.
 func (s *Store) cleanupTempFile(tempFile *os.File) {

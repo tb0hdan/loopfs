@@ -67,12 +67,6 @@ func getGoroutineIDOptimized() string {
 	return "unknown"
 }
 
-// getGoroutineID is an alias for backward compatibility with tests.
-//
-//nolint:unused // Used by tests
-func getGoroutineID() string {
-	return getGoroutineIDOptimized()
-}
 
 func init() {
 	// Configure zerolog with console writer for colored output

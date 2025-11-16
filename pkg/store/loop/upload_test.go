@@ -633,27 +633,6 @@ func (s *UploadTestSuite) TestSaveFileFromPathWithinMountedLoop() {
 	s.T().Logf("saveFileFromPathWithinMountedLoop failed as expected: %v", err)
 }
 
-// TestSaveFileToLoopFromPath tests the saveFileToLoopFromPath wrapper method
-func (s *UploadTestSuite) TestSaveFileToLoopFromPath() {
-	sourceFile, err := os.CreateTemp("", "save-to-loop-test-*")
-	s.Require().NoError(err)
-	defer func() {
-		sourceFile.Close()
-		os.Remove(sourceFile.Name())
-	}()
-
-	content := "test content for save to loop"
-	_, err = sourceFile.WriteString(content)
-	s.NoError(err)
-	sourceFile.Close()
-
-	// Test the wrapper method
-	err = s.store.saveFileToLoopFromPath(s.testHash, sourceFile.Name())
-	if err != nil {
-		s.T().Logf("saveFileToLoopFromPath failed as expected: %v", err)
-		s.Error(err)
-	}
-}
 
 // TestUploadSuite runs the upload test suite
 func TestUploadSuite(t *testing.T) {

@@ -31,7 +31,7 @@ func (s *LoggerTestSuite) SetupTest() {
 		Timestamp().
 		Logger().
 		Hook(zerolog.HookFunc(func(e *zerolog.Event, level zerolog.Level, msg string) {
-			e.Str("goid", getGoroutineID())
+			e.Str("goid", getGoroutineIDOptimized())
 		}))
 
 	// Replace the global logger for testing
@@ -46,7 +46,7 @@ func (s *LoggerTestSuite) TearDownTest() {
 
 // TestGetGoroutineID tests the goroutine ID extraction
 func (s *LoggerTestSuite) TestGetGoroutineID() {
-	goroutineID := getGoroutineID()
+	goroutineID := getGoroutineIDOptimized()
 
 	// Should return a non-empty string
 	s.NotEmpty(goroutineID)
@@ -155,8 +155,8 @@ func (s *LoggerTestSuite) TestLoggerLevels() {
 
 // TestGoroutineIDConsistency tests that goroutine ID is consistent within the same goroutine
 func (s *LoggerTestSuite) TestGoroutineIDConsistency() {
-	id1 := getGoroutineID()
-	id2 := getGoroutineID()
+	id1 := getGoroutineIDOptimized()
+	id2 := getGoroutineIDOptimized()
 
 	// Should be the same within the same goroutine
 	s.Equal(id1, id2)
@@ -164,11 +164,11 @@ func (s *LoggerTestSuite) TestGoroutineIDConsistency() {
 
 // TestGoroutineIDDifferentGoroutines tests that different goroutines have different IDs
 func (s *LoggerTestSuite) TestGoroutineIDDifferentGoroutines() {
-	mainID := getGoroutineID()
+	mainID := getGoroutineIDOptimized()
 
 	done := make(chan string, 1)
 	go func() {
-		done <- getGoroutineID()
+		done <- getGoroutineIDOptimized()
 	}()
 
 	goroutineID := <-done
@@ -238,10 +238,10 @@ func (s *LoggerTestSuite) TestLoggerConstants() {
 
 // TestEdgeCaseGoroutineID tests edge cases in goroutine ID parsing
 func (s *LoggerTestSuite) TestEdgeCaseGoroutineID() {
-	// Test that getGoroutineID handles edge cases gracefully
+	// Test that getGoroutineIDOptimized handles edge cases gracefully
 	// This is an internal function test, but important for reliability
 
-	id := getGoroutineID()
+	id := getGoroutineIDOptimized()
 
 	// Should never be empty
 	s.NotEmpty(id)

@@ -685,29 +685,6 @@ func (s *LoopStoreTestSuite) TestDeleteWithMountedLoop() {
 	s.IsType(store.FileNotFoundError{}, err)
 }
 
-// TestUploadSaveFileToLoop tests the saveFileToLoop function
-func (s *LoopStoreTestSuite) TestUploadSaveFileToLoop() {
-	// Create a temp file to test saveFileToLoop
-	tempFile, err := os.CreateTemp("", "test-save-*")
-	s.NoError(err)
-	defer os.Remove(tempFile.Name())
-	defer tempFile.Close()
-
-	content := "test content for save"
-	_, err = tempFile.WriteString(content)
-	s.NoError(err)
-
-	// Test with invalid hash (too short)
-	err = s.store.saveFileToLoop("abc", tempFile)
-	s.Error(err)
-	s.IsType(store.InvalidHashError{}, err)
-
-	// Test with valid hash but expect filesystem errors due to mount issues
-	validHash := s.testHash
-	err = s.store.saveFileToLoop(validHash, tempFile)
-	// This will fail due to mount/path issues in test environment
-	s.T().Logf("saveFileToLoop error (expected): %v", err)
-}
 
 // TestCleanupTempFileNil tests cleanupTempFile with nil file
 func (s *LoopStoreTestSuite) TestCleanupTempFileNil() {
