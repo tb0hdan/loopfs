@@ -30,12 +30,13 @@ func (cas *CASServer) copyAndHashToTempFile(src io.Reader, tempFile *os.File) (s
 }
 
 // prepareUploadWithVerification handles the verification process for uploads when Store Manager is available.
-func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (io.Reader, func(), error) {
+// Returns the hash, temp file path, and cleanup function for efficient upload.
+func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (string, string, func(), error) {
 	// Create a temporary file to save the upload for verification
 	tempFile, err := os.CreateTemp("", "upload-*.tmp")
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to create temporary file")
-		return nil, nil, err
+		return "", "", nil, err
 	}
 	tempPath := tempFile.Name()
 
@@ -53,34 +54,17 @@ func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (io.Reader, f
 	if err != nil {
 		cleanup()
 		log.Error().Err(err).Msg("Failed to save uploaded file to temp")
-		return nil, nil, err
+		return "", "", nil, err
 	}
 
 	// Call VerifyBlock with the actual hash to ensure there's enough space (resize if needed)
 	if err := cas.storeMgr.VerifyBlock(tempPath, hash); err != nil {
 		cleanup()
 		log.Error().Err(err).Str("hash", hash).Msg("Failed to verify block space")
-		return nil, nil, err
+		return "", "", nil, err
 	}
 
-	// Reopen the temp file for upload
-	//nolint:gosec // tempPath is created by os.CreateTemp, not user input
-	newSrc, err := os.Open(tempPath)
-	if err != nil {
-		cleanup()
-		log.Error().Err(err).Msg("Failed to reopen temp file")
-		return nil, nil, err
-	}
-
-	// Extended cleanup to also close the file
-	extendedCleanup := func() {
-		if closeErr := newSrc.Close(); closeErr != nil {
-			log.Warn().Err(closeErr).Str("temp_file", tempPath).Msg("Failed to close reopened temp file")
-		}
-		cleanup()
-	}
-
-	return newSrc, extendedCleanup, nil
+	return hash, tempPath, cleanup, nil
 }
 
 func (cas *CASServer) uploadFile(ctx echo.Context) error {
@@ -119,19 +103,20 @@ func (cas *CASServer) uploadFile(ctx echo.Context) error {
 
 // processUpload handles the core upload logic with store manager verification.
 func (cas *CASServer) processUpload(src io.Reader, filename string) (*store.UploadResult, error) {
-	// If we have a Store Manager, we need to verify the block has enough space
-	uploadSrc := src
-	var cleanup func()
+	// If we have a Store Manager, use the efficient single-pass upload flow
 	if cas.storeMgr != nil {
-		var prepErr error
-		uploadSrc, cleanup, prepErr = cas.prepareUploadWithVerification(src)
+		hash, tempPath, cleanup, prepErr := cas.prepareUploadWithVerification(src)
 		if prepErr != nil {
 			return nil, prepErr
 		}
 		defer cleanup()
+
+		// Use the efficient UploadWithHash method to avoid redundant temp files and hashing
+		return cas.storeMgr.UploadWithHash(tempPath, hash, filename)
 	}
 
-	return cas.store.Upload(uploadSrc, filename)
+	// Fallback to traditional upload flow for stores without manager
+	return cas.store.Upload(src, filename)
 }
 
 // handleUploadError handles different types of upload errors and returns appropriate JSON responses.

@@ -301,6 +301,10 @@ func (m *MockStoreInvalidHash) Upload(reader io.Reader, filename string) (*store
 	return nil, store.InvalidHashError{Hash: "invalid"}
 }
 
+func (m *MockStoreInvalidHash) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+	return nil, store.InvalidHashError{Hash: "invalid"}
+}
+
 // TestUploadFileInvalidHashError tests upload when store returns invalid hash error
 func (s *UploadTestSuite) TestUploadFileInvalidHashError() {
 	mockStore := &MockStoreInvalidHash{MockStore: NewMockStore()}
@@ -337,6 +341,10 @@ type MockStoreGenericError struct {
 }
 
 func (m *MockStoreGenericError) Upload(reader io.Reader, filename string) (*store.UploadResult, error) {
+	return nil, io.ErrUnexpectedEOF
+}
+
+func (m *MockStoreGenericError) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
 	return nil, io.ErrUnexpectedEOF
 }
 

@@ -104,6 +104,11 @@ func (m *Manager) Upload(reader io.Reader, filename string) (*store.UploadResult
 	return m.store.Upload(reader, filename)
 }
 
+// UploadWithHash delegates to the underlying store's UploadWithHash method.
+func (m *Manager) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+	return m.store.UploadWithHash(tempFilePath, hash, filename)
+}
+
 // Download delegates to the underlying store's Download method.
 func (m *Manager) Download(hash string) (string, error) {
 	return m.store.Download(hash)

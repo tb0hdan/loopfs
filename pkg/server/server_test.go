@@ -56,6 +56,30 @@ func (m *MockStore) Upload(reader io.Reader, filename string) (*store.UploadResu
 	return result, nil
 }
 
+// UploadWithHash implementation for mock store
+func (m *MockStore) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+	if m.shouldError && m.errorType == "upload" {
+		return nil, store.FileExistsError{Hash: "existing"}
+	}
+
+	// Read from the temp file
+	data, err := os.ReadFile(tempFilePath)
+	if err != nil {
+		return nil, err
+	}
+
+	m.files[hash] = data
+	m.fileInfo[hash] = &store.FileInfo{
+		Hash:      hash,
+		Size:      int64(len(data)),
+		CreatedAt: time.Now(),
+	}
+
+	result := &store.UploadResult{Hash: hash}
+	m.uploadResults[hash] = result
+	return result, nil
+}
+
 // Download implementation for mock store
 func (m *MockStore) Download(hash string) (string, error) {
 	if m.shouldError && m.errorType == "download" {

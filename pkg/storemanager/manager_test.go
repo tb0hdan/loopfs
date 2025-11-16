@@ -27,6 +27,14 @@ func (m *MockResizableStore) Upload(reader io.Reader, filename string) (*store.U
 	return args.Get(0).(*store.UploadResult), args.Error(1)
 }
 
+func (m *MockResizableStore) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+	args := m.Called(tempFilePath, hash, filename)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*store.UploadResult), args.Error(1)
+}
+
 func (m *MockResizableStore) Download(hash string) (string, error) {
 	args := m.Called(hash)
 	return args.String(0), args.Error(1)

@@ -223,6 +223,10 @@ type MockStoreDownloadError struct {
 	errorType string
 }
 
+func (m *MockStoreDownloadError) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+	return m.MockStore.UploadWithHash(tempFilePath, hash, filename)
+}
+
 func (m *MockStoreDownloadError) DownloadStream(hash string) (io.ReadCloser, error) {
 	switch m.errorType {
 	case "not_found":
@@ -275,6 +279,10 @@ func (m *MockCloseErrorReader) Close() error {
 // MockStoreCloseError implements a store that returns readers that error on close
 type MockStoreCloseError struct {
 	*MockStore
+}
+
+func (m *MockStoreCloseError) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+	return m.MockStore.UploadWithHash(tempFilePath, hash, filename)
 }
 
 func (m *MockStoreCloseError) DownloadStream(hash string) (io.ReadCloser, error) {

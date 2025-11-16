@@ -259,6 +259,10 @@ type MockStoreDeleteError struct {
 	errorType string
 }
 
+func (m *MockStoreDeleteError) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+	return m.MockStore.UploadWithHash(tempFilePath, hash, filename)
+}
+
 func (m *MockStoreDeleteError) Delete(hash string) error {
 	switch m.errorType {
 	case "not_found":

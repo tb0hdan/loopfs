@@ -30,6 +30,12 @@ type Store interface {
 	// If the file already exists, it returns an error with the existing hash.
 	Upload(reader io.Reader, filename string) (*UploadResult, error)
 
+	// UploadWithHash stores a file using a pre-calculated hash and temp file path.
+	// This method is more efficient as it avoids redundant hashing and temp file creation.
+	// The tempFilePath should point to a file containing the content to be stored.
+	// If the file already exists, it returns an error with the existing hash.
+	UploadWithHash(tempFilePath, hash, filename string) (*UploadResult, error)
+
 	// Download retrieves a file by its hash and returns the file path.
 	// Returns an error if the file doesn't exist or hash is invalid.
 	//

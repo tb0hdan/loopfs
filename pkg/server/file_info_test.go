@@ -302,6 +302,10 @@ type MockStoreFileInfoError struct {
 	errorType string
 }
 
+func (m *MockStoreFileInfoError) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+	return m.MockStore.UploadWithHash(tempFilePath, hash, filename)
+}
+
 func (m *MockStoreFileInfoError) GetFileInfo(hash string) (*store.FileInfo, error) {
 	switch m.errorType {
 	case "not_found":
