@@ -483,6 +483,22 @@ func (s *DownloadTestSuite) TestCleanupAfterError() {
 	// No assertions needed - just verify it doesn't panic
 }
 
+// TestOpenStreamingReader tests the openStreamingReader method
+func (s *DownloadTestSuite) TestOpenStreamingReader() {
+	// Test with invalid hash (should return error)
+	reader, err := s.store.openStreamingReader("invalidhash", "/tmp/mount")
+	s.Error(err)
+	s.Nil(reader)
+
+	// Test with valid hash but no loop file (should return error)
+	reader, err = s.store.openStreamingReader(s.testHash, "/tmp/mount")
+	s.Error(err)
+	s.Nil(reader)
+
+	// The method expects to find a file in a mounted loop, which won't exist in test environment
+	// This still exercises the method path and error handling
+}
+
 // TestDownloadSuite runs the download test suite
 func TestDownloadSuite(t *testing.T) {
 	suite.Run(t, new(DownloadTestSuite))

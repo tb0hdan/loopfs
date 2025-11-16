@@ -464,6 +464,7 @@ func (s *ResizeTestSuite) TestResizeWithCleanup() {
 	}
 }
 
+
 // TestResizeSuite runs the resize test suite
 func TestResizeSuite(t *testing.T) {
 	suite.Run(t, new(ResizeTestSuite))

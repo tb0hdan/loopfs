@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -629,6 +630,32 @@ func (s *ServerTestSuite) TestSwaggerUIFileNotFound() {
 	s.NoError(err)
 	s.Equal(http.StatusInternalServerError, rec.Code)
 	s.Contains(rec.Body.String(), "Failed to load template")
+}
+
+// TestStart tests the Start method
+func (s *ServerTestSuite) TestStart() {
+	// Start the server in a goroutine
+	go func() {
+		// Give it a small amount of time to set up
+		time.Sleep(10 * time.Millisecond)
+
+		// Send SIGTERM to trigger shutdown
+		proc, err := os.FindProcess(os.Getpid())
+		if err == nil {
+			proc.Signal(syscall.SIGTERM)
+		}
+	}()
+
+	// Start should block until signal received and then return with no error
+	err := s.server.Start("127.0.0.1:0") // Use port 0 for automatic assignment
+	s.NoError(err)
+}
+
+// TestStartServerError tests Start method when server startup fails
+func (s *ServerTestSuite) TestStartServerError() {
+	// Skip this test because Start method uses log.Fatal() which terminates the process
+	// This makes the test untestable in the current implementation
+	s.T().Skip("Skipping test that would cause process termination via log.Fatal()")
 }
 
 // TestSuite runs the server test suite

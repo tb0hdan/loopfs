@@ -32,6 +32,11 @@ func (cas *CASServer) copyAndHashToTempFile(src io.Reader, tempFile *os.File) (s
 // prepareUploadWithVerification handles the verification process for uploads when Store Manager is available.
 // Returns the hash, temp file path, and cleanup function for efficient upload.
 func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (string, string, func(), error) {
+	// Check if store manager is available
+	if cas.storeMgr == nil {
+		return "", "", nil, errors.New("store manager not available for verification")
+	}
+
 	// Create a temporary file to save the upload for verification
 	tempFile, err := os.CreateTemp("", "upload-*.tmp")
 	if err != nil {
