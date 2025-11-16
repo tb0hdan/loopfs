@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
@@ -11,6 +13,21 @@ import (
 
 	"github.com/labstack/echo/v4"
 )
+
+// copyAndHashToTempFile copies the reader content to a temp file while calculating SHA256 hash.
+func (cas *CASServer) copyAndHashToTempFile(src io.Reader, tempFile *os.File) (string, error) {
+	hasher := sha256.New()
+	writer := io.MultiWriter(hasher, tempFile)
+
+	if _, err := io.Copy(writer, src); err != nil {
+		log.Error().Err(err).Msg("Failed to copy and hash file")
+		return "", err
+	}
+
+	hash := hex.EncodeToString(hasher.Sum(nil))
+	log.Debug().Str("hash", hash).Msg("Calculated hash for uploaded file")
+	return hash, nil
+}
 
 // prepareUploadWithVerification handles the verification process for uploads when Store Manager is available.
 func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (io.Reader, func(), error) {
@@ -28,8 +45,8 @@ func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (io.Reader, f
 		}
 	}
 
-	// Copy the uploaded content to the temp file
-	_, err = io.Copy(tempFile, src)
+	// Copy the uploaded content to the temp file and calculate hash
+	hash, err := cas.copyAndHashToTempFile(src, tempFile)
 	if closeErr := tempFile.Close(); closeErr != nil {
 		log.Warn().Err(closeErr).Str("temp_file", tempPath).Msg("Failed to close temp file")
 	}
@@ -39,11 +56,10 @@ func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (io.Reader, f
 		return nil, nil, err
 	}
 
-	// Call VerifyBlock to ensure there's enough space (resize if needed)
-	// Note: We pass empty hash since this is a new upload
-	if err := cas.storeMgr.VerifyBlock(tempPath, ""); err != nil {
+	// Call VerifyBlock with the actual hash to ensure there's enough space (resize if needed)
+	if err := cas.storeMgr.VerifyBlock(tempPath, hash); err != nil {
 		cleanup()
-		log.Error().Err(err).Msg("Failed to verify block space")
+		log.Error().Err(err).Str("hash", hash).Msg("Failed to verify block space")
 		return nil, nil, err
 	}
 
@@ -91,42 +107,50 @@ func (cas *CASServer) uploadFile(ctx echo.Context) error {
 		}
 	}()
 
+	result, err := cas.processUpload(src, file.Filename)
+	if err != nil {
+		return cas.handleUploadError(ctx, err)
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]string{
+		"hash": result.Hash,
+	})
+}
+
+// processUpload handles the core upload logic with store manager verification.
+func (cas *CASServer) processUpload(src io.Reader, filename string) (*store.UploadResult, error) {
 	// If we have a Store Manager, we need to verify the block has enough space
-	var uploadSrc io.Reader = src
+	uploadSrc := src
 	var cleanup func()
 	if cas.storeMgr != nil {
 		var prepErr error
 		uploadSrc, cleanup, prepErr = cas.prepareUploadWithVerification(src)
 		if prepErr != nil {
-			return ctx.JSON(http.StatusInternalServerError, map[string]string{
-				"error": "failed to prepare upload",
-			})
+			return nil, prepErr
 		}
 		defer cleanup()
 	}
 
-	result, err := cas.store.Upload(uploadSrc, file.Filename)
-	if err != nil {
-		var fileExistsErr store.FileExistsError
-		if errors.As(err, &fileExistsErr) {
-			return ctx.JSON(http.StatusConflict, map[string]string{
-				"error": "file already exists",
-				"hash":  fileExistsErr.Hash,
-			})
-		}
-		var invalidHashErr store.InvalidHashError
-		if errors.As(err, &invalidHashErr) {
-			return ctx.JSON(http.StatusBadRequest, map[string]string{
-				"error": "invalid hash",
-			})
-		}
-		log.Error().Err(err).Msg("Failed to upload file")
-		return ctx.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "failed to upload file",
+	return cas.store.Upload(uploadSrc, filename)
+}
+
+// handleUploadError handles different types of upload errors and returns appropriate JSON responses.
+func (cas *CASServer) handleUploadError(ctx echo.Context, err error) error {
+	var fileExistsErr store.FileExistsError
+	if errors.As(err, &fileExistsErr) {
+		return ctx.JSON(http.StatusConflict, map[string]string{
+			"error": "file already exists",
+			"hash":  fileExistsErr.Hash,
 		})
 	}
-
-	return ctx.JSON(http.StatusOK, map[string]string{
-		"hash": result.Hash,
+	var invalidHashErr store.InvalidHashError
+	if errors.As(err, &invalidHashErr) {
+		return ctx.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid hash",
+		})
+	}
+	log.Error().Err(err).Msg("Failed to upload file")
+	return ctx.JSON(http.StatusInternalServerError, map[string]string{
+		"error": "failed to upload file",
 	})
 }
