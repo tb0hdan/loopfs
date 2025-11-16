@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	maxLoopDevices = 256 // Maximum number of loop devices allowed
+	maxLoopDevices = 65535 // Maximum number of loop devices allowed
 	minHashLength  = 4
 	minHashSubDir  = 8 // Minimum length for subdirectory structure (4 for loop + 4 for subdirectories)
 	hashLength     = 64
@@ -50,25 +50,25 @@ type TimeoutConfig struct {
 // DefaultTimeoutConfig returns the default timeout configuration.
 func DefaultTimeoutConfig() TimeoutConfig {
 	return TimeoutConfig{
-		BaseCommandTimeout: defaultBaseTimeoutSeconds * time.Second,    // Timeout for fast operations (mount, unmount, stat)
-		DDTimeoutPerGB:     defaultDDTimeoutSeconds * time.Second,      // Timeout per GB for dd operations
-		MkfsTimeoutPerGB:   defaultMkfsTimeoutSeconds * time.Second,    // Timeout per GB for mkfs operations
-		RsyncTimeoutPerGB:  defaultRsyncTimeoutSeconds * time.Second,   // Timeout per GB for rsync operations
-		MinLongOpTimeout:   defaultMinLongTimeoutMins * time.Minute,    // Minimum timeout for long operations
-		MaxLongOpTimeout:   defaultMaxLongTimeoutMins * time.Minute,    // Maximum timeout for long operations
+		BaseCommandTimeout: defaultBaseTimeoutSeconds * time.Second,  // Timeout for fast operations (mount, unmount, stat)
+		DDTimeoutPerGB:     defaultDDTimeoutSeconds * time.Second,    // Timeout per GB for dd operations
+		MkfsTimeoutPerGB:   defaultMkfsTimeoutSeconds * time.Second,  // Timeout per GB for mkfs operations
+		RsyncTimeoutPerGB:  defaultRsyncTimeoutSeconds * time.Second, // Timeout per GB for rsync operations
+		MinLongOpTimeout:   defaultMinLongTimeoutMins * time.Minute,  // Minimum timeout for long operations
+		MaxLongOpTimeout:   defaultMaxLongTimeoutMins * time.Minute,  // Maximum timeout for long operations
 	}
 }
 
 // Store implements the store.Store interface for Loop CAS storage.
 type Store struct {
-	storageDir       string
-	loopFileSize     int64
-	timeouts         TimeoutConfig
-	mountMutex       sync.Mutex
-	creationMutex    sync.Mutex
-	creationLocks    map[string]*sync.Mutex
-	refCountMutex    sync.Mutex
-	refCounts        map[string]int
+	storageDir         string
+	loopFileSize       int64
+	timeouts           TimeoutConfig
+	mountMutex         sync.Mutex
+	creationMutex      sync.Mutex
+	creationLocks      map[string]*sync.Mutex
+	refCountMutex      sync.Mutex
+	refCounts          map[string]int
 	deduplicationMutex sync.Mutex
 	deduplicationLocks map[string]*sync.Mutex
 }
@@ -138,15 +138,16 @@ func (s *Store) getLoopFilePath(hash string) string {
 }
 
 // getMountPoint returns the mount point for a given hash based on hash prefix.
+// CRITICAL: Must use same prefix as getLoopFilePath to ensure one mount per loop file.
 func (s *Store) getMountPoint(hash string) string {
 	if len(hash) < minHashLength {
 		return ""
 	}
-	// Create mount point based on hash prefix: data/ab/cd/loopef
+	// Create mount point based on SAME hash prefix as loop file: data/ab/cd/loopmount
+	// This ensures each loop file has exactly one mount point, preventing corruption
 	dir1 := hash[:2]
 	dir2 := hash[2:4]
-	dir3 := hash[4:6]
-	return filepath.Join(s.storageDir, dir1, dir2, "loop"+dir3)
+	return filepath.Join(s.storageDir, dir1, dir2, "loopmount")
 }
 
 // getFilePath returns the file path within the mounted loop filesystem with hierarchical structure.
@@ -155,7 +156,7 @@ func (s *Store) getFilePath(hash string) string {
 		return ""
 	}
 	mountPoint := s.getMountPoint(hash)
-	// Create hierarchical path within mount: mountpoint/02/03/04050607...
+	// Create hierarchical path within mount: mountpoint/04/05/06070809...
 	// First 4 chars (00/01) are used for loop file path, remaining chars go inside
 	if len(hash) < minHashSubDir {
 		return ""

@@ -102,7 +102,7 @@ func (s *LoopStoreTestSuite) TestGetMountPoint() {
 		{
 			name:     "valid hash",
 			hash:     "abcd1234567890",
-			expected: filepath.Join(s.tempDir, "ab", "cd", "loop12"),
+			expected: filepath.Join(s.tempDir, "ab", "cd", "loopmount"),
 		},
 		{
 			name:     "short hash",
@@ -133,7 +133,7 @@ func (s *LoopStoreTestSuite) TestGetFilePath() {
 				s.tempDir,
 				"ab",
 				"cd",
-				"loop12",
+				"loopmount",
 				"12",
 				"34",
 				"56789012345678901234567890123456789012345678901234567890",
@@ -757,8 +757,8 @@ func (s *LoopStoreTestSuite) TestPathFunctions() {
 	hashMinSubDir := "abcdefgh"
 	path = s.store.getFilePath(hashMinSubDir)
 	s.Contains(path, s.tempDir)
-	s.Contains(path, "ef/gh")  // chars 4-6 and 6-8
-	s.Contains(path, "loopef") // mount point uses chars 4-6
+	s.Contains(path, "ef/gh")     // chars 4-6 and 6-8
+	s.Contains(path, "loopmount") // mount point uses fixed name
 
 	// Test with hash just over minHashSubDir
 	hash9 := "abcdefgh9"
