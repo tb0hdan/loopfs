@@ -1,14 +1,11 @@
 package loop
 
 import (
-	"bufio"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +14,6 @@ import (
 )
 
 const (
-	maxLoopDevices = 65535 // Maximum number of loop devices allowed
 	minHashLength  = 4
 	minHashSubDir  = 8 // Minimum length for subdirectory structure (4 for loop + 4 for subdirectories)
 	hashLength     = 64
@@ -328,59 +324,6 @@ func (s *Store) findFileInLoop(hash string) (string, error) {
 	return filePath, nil
 }
 
-// getUsedLoops checks the number of currently used loop devices and returns an error
-// if the count exceeds maxLoopDevices.
-func (s *Store) getUsedLoops() error {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.BaseCommandTimeout)
-	defer cancel()
-
-	// Run losetup -l to get the list of loop devices
-	cmd := exec.CommandContext(ctx, "losetup", "-l")
-	output, err := cmd.Output()
-	if err != nil {
-		// If losetup fails with exit code 1, it might mean no loop devices are in use
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
-			// No loop devices in use
-			return nil
-		}
-		log.Error().Err(err).Msg("Failed to check loop devices")
-		return fmt.Errorf("failed to check loop devices: %w", err)
-	}
-
-	// Count the number of loop devices (excluding the header line)
-	scanner := bufio.NewScanner(strings.NewReader(string(output)))
-	count := 0
-	firstLine := true
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		// Skip the header line
-		if firstLine && strings.HasPrefix(line, "NAME") {
-			firstLine = false
-			continue
-		}
-		count++
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Error().Err(err).Msg("Failed to parse loop device list")
-		return fmt.Errorf("failed to parse loop device list: %w", err)
-	}
-
-	if count >= maxLoopDevices {
-		log.Error().Int("current_count", count).Int("max_allowed", maxLoopDevices).
-			Msg("Maximum number of loop devices exceeded")
-		return fmt.Errorf("maximum number of loop devices (%d) exceeded: currently %d in use",
-			maxLoopDevices, count)
-	}
-
-	log.Debug().Int("loop_count", count).Int("max_allowed", maxLoopDevices).
-		Msg("Loop device count check passed")
-	return nil
-}
 
 // createLoopFile creates a new loop file and formats it with ext4.
 func (s *Store) createLoopFile(hash string) error {
@@ -451,11 +394,6 @@ func (s *Store) createLoopFile(hash string) error {
 func (s *Store) mountLoopFile(hash string) error {
 	s.mountMutex.Lock()
 	defer s.mountMutex.Unlock()
-
-	// Check loop device limit before proceeding
-	if err := s.getUsedLoops(); err != nil {
-		return err
-	}
 
 	loopFilePath := s.getLoopFilePath(hash)
 	mountPoint := s.getMountPoint(hash)
