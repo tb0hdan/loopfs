@@ -26,7 +26,7 @@ CASd uses a simple file-based storage implementation. Files are stored in a dire
 For example, a file with the SHA256 hash `abcdef1234567890...` would be stored in the following path:
 
 ```bash
-/data/cas/ab/cd/loopef/1234567890...
+/data/cas/ab/cd/loopmount/1234567890...
 ```
 
 Where `/data/cas/ab/cd/loop.img` is the loop file for the content. It gets created on the first upload of the content.
