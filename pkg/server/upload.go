@@ -81,7 +81,18 @@ func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (string, stri
 		return "", "", nil, err
 	}
 
-	// Call VerifyBlock with the actual hash to ensure there's enough space (resize if needed)
+	// Short-circuit: Check if file already exists before expensive VerifyBlock/ResizeBlock
+	// This avoids costly resize operations (including multi-minute rsync) for duplicate uploads
+	if exists, err := cas.storeMgr.Exists(hash); err != nil {
+		// Log error but continue - the UploadWithHash will catch it later
+		log.Warn().Err(err).Str("hash", hash).Msg("Failed to check file existence, continuing with verification")
+	} else if exists {
+		// File already exists, no need for space verification
+		log.Debug().Str("hash", hash).Msg("File already exists, skipping block verification")
+		return hash, tempPath, cleanup, nil
+	}
+
+	// File doesn't exist or check failed - proceed with VerifyBlock to ensure space
 	if err := cas.storeMgr.VerifyBlock(tempPath, hash); err != nil {
 		cleanup()
 		log.Error().Err(err).Str("hash", hash).Msg("Failed to verify block space")
