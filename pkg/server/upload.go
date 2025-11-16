@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -12,6 +13,10 @@ import (
 	"loopfs/pkg/store"
 
 	"github.com/labstack/echo/v4"
+)
+
+const (
+	tempDirPerm = 0750 // Directory permissions for temp directories
 )
 
 // copyAndHashToTempFile copies the reader content to a temp file while calculating SHA256 hash.
@@ -29,6 +34,15 @@ func (cas *CASServer) copyAndHashToTempFile(src io.Reader, tempFile *os.File) (s
 	return hash, nil
 }
 
+// ensureTempDir creates the server temp directory if it doesn't exist.
+func (cas *CASServer) ensureTempDir() error {
+	if err := os.MkdirAll(cas.tempDir, tempDirPerm); err != nil {
+		log.Error().Err(err).Str("temp_dir", cas.tempDir).Msg("Failed to create server temp directory")
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	return nil
+}
+
 // prepareUploadWithVerification handles the verification process for uploads when Store Manager is available.
 // Returns the hash, temp file path, and cleanup function for efficient upload.
 func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (string, string, func(), error) {
@@ -37,10 +51,15 @@ func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (string, stri
 		return "", "", nil, errors.New("store manager not available for verification")
 	}
 
-	// Create a temporary file to save the upload for verification
-	tempFile, err := os.CreateTemp("", "upload-*.tmp")
+	// Ensure temp directory exists
+	if err := cas.ensureTempDir(); err != nil {
+		return "", "", nil, err
+	}
+
+	// Create a temporary file in the configured temp directory
+	tempFile, err := os.CreateTemp(cas.tempDir, "upload-*.tmp")
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to create temporary file")
+		log.Error().Err(err).Str("temp_dir", cas.tempDir).Msg("Failed to create temporary file")
 		return "", "", nil, err
 	}
 	tempPath := tempFile.Name()

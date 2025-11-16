@@ -39,10 +39,15 @@ func (s *Store) Upload(reader io.Reader, filename string) (*store.UploadResult, 
 
 // processAndHashFile reads from reader, hashes content and saves to temp file.
 func (s *Store) processAndHashFile(reader io.Reader) (string, *os.File, error) {
+	// Ensure temp directory exists
+	if err := s.ensureTempDir(); err != nil {
+		return "", nil, err
+	}
+
 	hasher := sha256.New()
-	tempFile, err := os.CreateTemp("", "cas-upload-*")
+	tempFile, err := os.CreateTemp(s.tempDir, "cas-upload-*")
 	if err != nil {
-		log.Error().Err(err).Msg("Failed to create temporary file")
+		log.Error().Err(err).Str("temp_dir", s.tempDir).Msg("Failed to create temporary file")
 		return "", nil, err
 	}
 

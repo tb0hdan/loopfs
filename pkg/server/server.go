@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ const (
 
 type CASServer struct {
 	storageDir string
+	tempDir    string // Directory for temporary files during uploads
 	webDir     string
 	echo       *echo.Echo
 	version    string
@@ -33,6 +35,10 @@ type CASServer struct {
 }
 
 func NewCASServer(storageDir, webDir, version string, storeImpl store.Store) *CASServer {
+	return NewCASServerWithTempDir(storageDir, filepath.Join(storageDir, "temp"), webDir, version, storeImpl)
+}
+
+func NewCASServerWithTempDir(storageDir, tempDir, webDir, version string, storeImpl store.Store) *CASServer {
 	// Check if storeImpl is actually a Store Manager
 	var storeMgr *storemanager.Manager
 	if mgr, ok := storeImpl.(*storemanager.Manager); ok {
@@ -41,6 +47,7 @@ func NewCASServer(storageDir, webDir, version string, storeImpl store.Store) *CA
 
 	return &CASServer{
 		storageDir: storageDir,
+		tempDir:    tempDir,
 		webDir:     webDir,
 		echo:       echo.New(),
 		version:    version,

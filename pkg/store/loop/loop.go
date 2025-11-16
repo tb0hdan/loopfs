@@ -62,6 +62,7 @@ func DefaultTimeoutConfig() TimeoutConfig {
 // Store implements the store.Store interface for Loop CAS storage.
 type Store struct {
 	storageDir         string
+	tempDir            string // Directory for temporary files during uploads
 	loopFileSize       int64
 	timeouts           TimeoutConfig
 	mountMutex         sync.Mutex
@@ -76,9 +77,17 @@ type Store struct {
 }
 
 // New creates a new Loop store with the specified storage directory, loop file size, and timeout configuration.
+// The temp directory defaults to a "temp" subdirectory within the storage directory.
 func New(storageDir string, loopFileSize int64, timeouts TimeoutConfig) *Store {
+	return NewWithTempDir(storageDir, filepath.Join(storageDir, "temp"), loopFileSize, timeouts)
+}
+
+// NewWithTempDir creates a new Loop store with an explicit temp directory for upload staging.
+// This allows avoiding temp directory space limitations by using storage directory space.
+func NewWithTempDir(storageDir, tempDir string, loopFileSize int64, timeouts TimeoutConfig) *Store {
 	return &Store{
 		storageDir:         storageDir,
+		tempDir:            tempDir,
 		loopFileSize:       loopFileSize,
 		timeouts:           timeouts,
 		creationLocks:      make(map[string]*sync.Mutex),
@@ -91,6 +100,15 @@ func New(storageDir string, loopFileSize int64, timeouts TimeoutConfig) *Store {
 // NewWithDefaults creates a new Loop store with default timeout configuration.
 func NewWithDefaults(storageDir string, loopFileSize int64) *Store {
 	return New(storageDir, loopFileSize, DefaultTimeoutConfig())
+}
+
+// ensureTempDir creates the temp directory if it doesn't exist.
+func (s *Store) ensureTempDir() error {
+	if err := os.MkdirAll(s.tempDir, dirPerm); err != nil {
+		log.Error().Err(err).Str("temp_dir", s.tempDir).Msg("Failed to create temp directory")
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	return nil
 }
 
 // calculateTimeout calculates appropriate timeout for operations based on file size and operation type.
