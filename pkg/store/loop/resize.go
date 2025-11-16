@@ -5,13 +5,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"loopfs/pkg/log"
 )
 
 const (
 	// Constants for resize operations.
-	bytesPerMB = 1024 * 1024
+	bytesPerMB                = 1024 * 1024
+	quiescenceCheckIntervalMS = 10 // Milliseconds between reference count checks
 )
 
 // createNewLoopFile creates and formats a new loop file.
@@ -284,13 +286,31 @@ func (s *Store) performResizeOperations(hash, mountPoint, loopFilePath, newLoopF
 	return s.replaceOldLoopFile(loopFilePath, newLoopFilePath)
 }
 
+// waitForQuiescence waits for all active operations on a mount point to complete.
+// This is critical for resize safety - we must wait for ref count to reach zero.
+func (s *Store) waitForQuiescence(mountPoint string) {
+	for {
+		refCount := s.getCurrentRefCount(mountPoint)
+		if refCount == 0 {
+			break
+		}
+		log.Debug().Str("mount_point", mountPoint).Int("ref_count", refCount).
+			Msg("Waiting for active operations to complete before resize")
+		// Brief sleep to avoid busy-waiting
+		time.Sleep(quiescenceCheckIntervalMS * time.Millisecond)
+	}
+}
+
 // ResizeBlock resizes a loop block to accommodate more data.
+// CRITICAL: This function coordinates with active file operations through reference counting.
 // It performs the following steps:
-// 1. Mounts the existing loop image
-// 2. Creates a new image file with the specified size
-// 3. Uses rsync to copy data from the existing to the new image
-// 4. Unmounts both images
-// 5. Moves the new image over the old one.
+// 1. Acquires exclusive write lock for the loop file (blocks new operations)
+// 2. Waits for all active operations to complete (reference count reaches zero)
+// 3. Mounts the existing loop image exclusively
+// 4. Creates a new image file with the specified size
+// 5. Uses rsync to copy data from the existing to the new image
+// 6. Unmounts both images
+// 7. Moves the new image over the old one.
 func (s *Store) ResizeBlock(hash string, newSize int64) error {
 	// Validate and prepare
 	loopFilePath, mountPoint, newLoopFilePath, newMountPoint, err := s.validateAndPrepareResize(hash, newSize)
@@ -298,10 +318,26 @@ func (s *Store) ResizeBlock(hash string, newSize int64) error {
 		return err
 	}
 
+	// CRITICAL: Acquire exclusive write lock for resize coordination
+	// This prevents new file operations from starting while we resize
+	resizeLock := s.getResizeLock(loopFilePath)
+	resizeLock.Lock()
+	defer resizeLock.Unlock()
+
+	log.Info().Str("hash", hash).Str("loop_file", loopFilePath).
+		Msg("Acquired exclusive lock for resize operation")
+
+	// CRITICAL: Wait for all active operations to complete
+	// We must ensure no operations are using the filesystem before proceeding
+	s.waitForQuiescence(mountPoint)
+
+	log.Info().Str("hash", hash).Str("mount_point", mountPoint).
+		Msg("All active operations completed, proceeding with resize")
+
 	// Set up cleanup handler
 	defer s.setupCleanupHandler(loopFilePath, newLoopFilePath, newMountPoint)()
 
-	// Step 1: Mount existing loop image
+	// Step 1: Mount existing loop image directly (no reference counting needed since we're exclusive)
 	if err := s.mountLoopFile(hash); err != nil {
 		log.Error().Err(err).Str("hash", hash).Msg("Failed to mount existing loop file for resize")
 		return fmt.Errorf("failed to mount existing loop file: %w", err)
@@ -319,6 +355,9 @@ func (s *Store) ResizeBlock(hash string, newSize int64) error {
 
 	// Log completion
 	s.logResizeCompletion(hash, loopFilePath, newSize)
+
+	// Clean up resize lock to prevent memory leaks
+	defer s.cleanupResizeLock(loopFilePath)
 
 	return nil
 }

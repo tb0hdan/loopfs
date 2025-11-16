@@ -71,6 +71,8 @@ type Store struct {
 	refCounts          map[string]int
 	deduplicationMutex sync.Mutex
 	deduplicationLocks map[string]*sync.Mutex
+	resizeMutex        sync.Mutex
+	resizeLocks        map[string]*sync.RWMutex
 }
 
 // New creates a new Loop store with the specified storage directory, loop file size, and timeout configuration.
@@ -82,6 +84,7 @@ func New(storageDir string, loopFileSize int64, timeouts TimeoutConfig) *Store {
 		creationLocks:      make(map[string]*sync.Mutex),
 		refCounts:          make(map[string]int),
 		deduplicationLocks: make(map[string]*sync.Mutex),
+		resizeLocks:        make(map[string]*sync.RWMutex),
 	}
 }
 
@@ -222,6 +225,31 @@ func (s *Store) cleanupDeduplicationMutex(hash string) {
 	delete(s.deduplicationLocks, hash)
 }
 
+// getResizeLock returns or creates a resize lock for the given loop file path.
+// This ensures that only one resize operation can occur per loop file at a time,
+// and coordinates with active file operations through reference counting.
+func (s *Store) getResizeLock(loopFilePath string) *sync.RWMutex {
+	s.resizeMutex.Lock()
+	defer s.resizeMutex.Unlock()
+
+	if lock, exists := s.resizeLocks[loopFilePath]; exists {
+		return lock
+	}
+
+	lock := &sync.RWMutex{}
+	s.resizeLocks[loopFilePath] = lock
+	return lock
+}
+
+// cleanupResizeLock removes the resize lock for the given loop file path if no longer needed.
+// This prevents memory leaks from the resizeLocks map.
+func (s *Store) cleanupResizeLock(loopFilePath string) {
+	s.resizeMutex.Lock()
+	defer s.resizeMutex.Unlock()
+
+	delete(s.resizeLocks, loopFilePath)
+}
+
 // incrementRefCount increments the reference count for a mount point.
 // Returns true if this is the first reference (mount needed), false otherwise.
 func (s *Store) incrementRefCount(mountPoint string) bool {
@@ -246,6 +274,15 @@ func (s *Store) decrementRefCount(mountPoint string) bool {
 		}
 	}
 	return false
+}
+
+// getCurrentRefCount returns the current reference count for a mount point.
+// Used internally for resize coordination.
+func (s *Store) getCurrentRefCount(mountPoint string) int {
+	s.refCountMutex.Lock()
+	defer s.refCountMutex.Unlock()
+
+	return s.refCounts[mountPoint]
 }
 
 // findFileInLoop searches for a file in the mounted loop filesystem and returns the actual file path.
@@ -468,9 +505,15 @@ func (s *Store) isMounted(mountPoint string) bool {
 
 // withMountedLoop executes a function with the loop file mounted, ensuring cleanup.
 // Uses reference counting to prevent premature unmounting when multiple operations are concurrent.
+// Coordinates with resize operations to prevent conflicts.
 func (s *Store) withMountedLoop(hash string, callback func() error) error {
 	loopFilePath := s.getLoopFilePath(hash)
 	mountPoint := s.getMountPoint(hash)
+
+	// Acquire read lock for resize coordination - prevents resize during file operations
+	resizeLock := s.getResizeLock(loopFilePath)
+	resizeLock.RLock()
+	defer resizeLock.RUnlock()
 
 	// Get per-loop-file mutex to synchronize creation
 	creationMutex := s.getCreationMutex(loopFilePath)
