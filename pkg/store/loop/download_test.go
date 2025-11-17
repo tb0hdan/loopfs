@@ -469,7 +469,7 @@ func (s *DownloadTestSuite) TestCleanupAfterErrorWithLock() {
 	// Acquire the lock before cleanup
 	resizeLock.RLock()
 	// This should not panic or cause issues and will release the lock
-	s.store.cleanupAfterErrorWithLock(s.testHash, mountPoint, resizeLock)
+	s.store.cleanupAfterErrorWithLock(mountPoint, resizeLock)
 	// No assertions needed - just verify it doesn't panic
 }
 

@@ -26,7 +26,7 @@ func (s *Store) GetFileInfo(hash string) (*store.FileInfo, error) {
 
 	// Check if loop file exists (now protected by read lock)
 	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
-		log.Info().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
+		log.Debug().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
 		return nil, store.FileNotFoundError{Hash: hash}
 	} else if err != nil {
 		return nil, err
@@ -37,7 +37,7 @@ func (s *Store) GetFileInfo(hash string) (*store.FileInfo, error) {
 	err := s.withMountedLoopUnlocked(hash, func() error {
 		filePath, err := s.findFileInLoop(hash)
 		if err != nil {
-			log.Info().Str("hash", hash).Msg("File not found in loop")
+			log.Debug().Str("hash", hash).Msg("File not found in loop")
 			return err
 		}
 
@@ -53,7 +53,7 @@ func (s *Store) GetFileInfo(hash string) (*store.FileInfo, error) {
 			CreatedAt: osFileInfo.ModTime(),
 		}
 
-		log.Info().Str("hash", hash).Int64("size", osFileInfo.Size()).Msg("File info retrieved")
+		log.Debug().Str("hash", hash).Int64("size", osFileInfo.Size()).Msg("File info retrieved")
 		return nil
 	})
 

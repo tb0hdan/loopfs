@@ -12,7 +12,7 @@ import (
 
 func (cas *CASServer) downloadFile(ctx echo.Context) error {
 	hash := ctx.Param("hash")
-	log.Info().Str("hash", hash).Msg("File download request")
+	log.Debug().Str("hash", hash).Msg("File download request")
 
 	reader, err := cas.store.DownloadStream(hash)
 	if err != nil {
@@ -41,7 +41,7 @@ func (cas *CASServer) downloadFile(ctx echo.Context) error {
 		}
 	}()
 
-	log.Info().Str("hash", hash).Msg("Serving streaming file download")
+	log.Debug().Str("hash", hash).Msg("Serving streaming file download")
 
 	// Stream the file directly to the client
 	return ctx.Stream(http.StatusOK, "application/octet-stream", reader)

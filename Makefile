@@ -16,9 +16,15 @@ test: build-dir
 	@go test -v ./... -coverprofile=build/coverage.out
 	@go tool cover -html=build/coverage.out -o build/coverage.html
 
-build:
+build: casd cas-test
+
+casd:
 	@echo "Building the project..."
 	@go build -o build/casd cmd/casd/*.go
+
+cas-test:
+	@echo "Building the test tool..."
+	@go build -o build/cas-test cmd/cas-test/*.go
 
 tools:
 	@echo "Running tools..."

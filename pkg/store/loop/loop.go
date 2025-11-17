@@ -14,11 +14,11 @@ import (
 )
 
 const (
-	minHashLength  = 4
-	minHashSubDir  = 8 // Minimum length for subdirectory structure (4 for loop + 4 for subdirectories)
-	hashLength     = 64
-	dirPerm        = 0750
-	blockSize      = "1M"
+	minHashLength = 4
+	minHashSubDir = 8 // Minimum length for subdirectory structure (4 for loop + 4 for subdirectories)
+	hashLength    = 64
+	dirPerm       = 0750
+	blockSize     = "1M"
 	// Size conversion constants.
 	bytesToKB            = 1024
 	bytesToMB            = 1024 * 1024
@@ -31,6 +31,7 @@ const (
 	defaultRsyncTimeoutSeconds = 120
 	defaultMinLongTimeoutMins  = 5
 	defaultMaxLongTimeoutMins  = 30
+	defaultMountCacheTTL       = 5 * time.Minute
 )
 
 // TimeoutConfig holds configurable timeout settings for loop operations.
@@ -55,39 +56,59 @@ func DefaultTimeoutConfig() TimeoutConfig {
 	}
 }
 
+// DefaultMountCacheTTL returns the default idle duration to keep mounts active.
+func DefaultMountCacheTTL() time.Duration {
+	return defaultMountCacheTTL
+}
+
 // Store implements the store.Store interface for Loop CAS storage.
 type Store struct {
 	storageDir         string
 	tempDir            string // Directory for temporary files during uploads
 	loopFileSize       int64
 	timeouts           TimeoutConfig
+	mountTTL           time.Duration
 	mountMutex         sync.Mutex
 	creationMutex      sync.Mutex
 	creationLocks      map[string]*sync.Mutex
 	refCountMutex      sync.Mutex
 	refCounts          map[string]int
+	mountTimers        map[string]*time.Timer
+	mountStatuses      map[string]*mountStatus
 	deduplicationMutex sync.Mutex
 	deduplicationLocks map[string]*sync.Mutex
 	resizeMutex        sync.Mutex
 	resizeLocks        map[string]*sync.RWMutex
 }
 
-// New creates a new Loop store with the specified storage directory, loop file size, and timeout configuration.
-// The temp directory defaults to a "temp" subdirectory within the storage directory.
-func New(storageDir string, loopFileSize int64, timeouts TimeoutConfig) *Store {
-	return NewWithTempDir(storageDir, filepath.Join(storageDir, "temp"), loopFileSize, timeouts)
+type mountStatus struct {
+	done chan struct{}
+	err  error
+}
+
+// New creates a new Loop store with the specified storage directory, loop file size, timeout configuration,
+// and mount cache TTL. The temp directory defaults to a "temp" subdirectory within the storage directory.
+func New(storageDir string, loopFileSize int64, timeouts TimeoutConfig, mountTTL time.Duration) *Store {
+	return NewWithTempDir(storageDir, filepath.Join(storageDir, "temp"), loopFileSize, timeouts, mountTTL)
 }
 
 // NewWithTempDir creates a new Loop store with an explicit temp directory for upload staging.
 // This allows avoiding temp directory space limitations by using storage directory space.
-func NewWithTempDir(storageDir, tempDir string, loopFileSize int64, timeouts TimeoutConfig) *Store {
+func NewWithTempDir(storageDir, tempDir string, loopFileSize int64, timeouts TimeoutConfig, mountTTL time.Duration) *Store {
+	if mountTTL <= 0 {
+		mountTTL = defaultMountCacheTTL
+	}
+
 	return &Store{
 		storageDir:         storageDir,
 		tempDir:            tempDir,
 		loopFileSize:       loopFileSize,
 		timeouts:           timeouts,
+		mountTTL:           mountTTL,
 		creationLocks:      make(map[string]*sync.Mutex),
 		refCounts:          make(map[string]int),
+		mountTimers:        make(map[string]*time.Timer),
+		mountStatuses:      make(map[string]*mountStatus),
 		deduplicationLocks: make(map[string]*sync.Mutex),
 		resizeLocks:        make(map[string]*sync.RWMutex),
 	}
@@ -95,7 +116,7 @@ func NewWithTempDir(storageDir, tempDir string, loopFileSize int64, timeouts Tim
 
 // NewWithDefaults creates a new Loop store with default timeout configuration.
 func NewWithDefaults(storageDir string, loopFileSize int64) *Store {
-	return New(storageDir, loopFileSize, DefaultTimeoutConfig())
+	return New(storageDir, loopFileSize, DefaultTimeoutConfig(), DefaultMountCacheTTL())
 }
 
 // ensureTempDir creates the temp directory if it doesn't exist.
@@ -264,30 +285,81 @@ func (s *Store) cleanupResizeLock(loopFilePath string) {
 	delete(s.resizeLocks, loopFilePath)
 }
 
+func newMountStatus() *mountStatus {
+	return &mountStatus{done: make(chan struct{})}
+}
+
+// signalMountReady notifies waiters that a mount attempt has completed.
+func (s *Store) signalMountReady(mountPoint string, mountErr error) {
+	s.refCountMutex.Lock()
+	defer s.refCountMutex.Unlock()
+
+	status, exists := s.mountStatuses[mountPoint]
+	if !exists {
+		return
+	}
+
+	status.err = mountErr
+	close(status.done)
+	delete(s.mountStatuses, mountPoint)
+}
+
+// waitForMountReady blocks until the in-progress mount for mountPoint completes.
+func (s *Store) waitForMountReady(mountPoint string) error {
+	s.refCountMutex.Lock()
+	status := s.mountStatuses[mountPoint]
+	s.refCountMutex.Unlock()
+
+	if status == nil {
+		return nil
+	}
+
+	<-status.done
+	return status.err
+}
+
 // incrementRefCount increments the reference count for a mount point.
 // Returns true if this is the first reference (mount needed), false otherwise.
 func (s *Store) incrementRefCount(mountPoint string) bool {
 	s.refCountMutex.Lock()
 	defer s.refCountMutex.Unlock()
 
+	s.stopMountTimerLocked(mountPoint)
+
 	s.refCounts[mountPoint]++
-	return s.refCounts[mountPoint] == 1
+	if s.refCounts[mountPoint] == 1 {
+		s.mountStatuses[mountPoint] = newMountStatus()
+		return true
+	}
+	return false
 }
 
 // decrementRefCount decrements the reference count for a mount point.
 // Returns true if this was the last reference (unmount needed), false otherwise.
-func (s *Store) decrementRefCount(mountPoint string) bool {
+func (s *Store) decrementRefCount(mountPoint string) {
+	var unmountNow bool
+
 	s.refCountMutex.Lock()
-	defer s.refCountMutex.Unlock()
 
 	if s.refCounts[mountPoint] > 0 {
 		s.refCounts[mountPoint]--
 		if s.refCounts[mountPoint] == 0 {
 			delete(s.refCounts, mountPoint)
-			return true
+			if s.mountTTL <= 0 {
+				unmountNow = true
+			} else {
+				s.scheduleUnmountLocked(mountPoint)
+			}
 		}
 	}
-	return false
+
+	s.refCountMutex.Unlock()
+
+	if unmountNow {
+		if err := s.unmountMountPoint(mountPoint); err != nil {
+			log.Error().Err(err).Str("mount_point", mountPoint).Msg("Failed to unmount loop file during cleanup")
+		}
+	}
 }
 
 // getCurrentRefCount returns the current reference count for a mount point.
@@ -297,6 +369,45 @@ func (s *Store) getCurrentRefCount(mountPoint string) int {
 	defer s.refCountMutex.Unlock()
 
 	return s.refCounts[mountPoint]
+}
+
+func (s *Store) stopMountTimerLocked(mountPoint string) {
+	if timer, exists := s.mountTimers[mountPoint]; exists {
+		timer.Stop()
+		delete(s.mountTimers, mountPoint)
+	}
+}
+
+func (s *Store) scheduleUnmountLocked(mountPoint string) {
+	if s.mountTTL <= 0 {
+		return
+	}
+
+	if timer, exists := s.mountTimers[mountPoint]; exists {
+		timer.Stop()
+	}
+
+	timer := time.AfterFunc(s.mountTTL, func() {
+		s.handleMountTimeout(mountPoint)
+	})
+	s.mountTimers[mountPoint] = timer
+}
+
+func (s *Store) handleMountTimeout(mountPoint string) {
+	s.refCountMutex.Lock()
+	if refCount := s.refCounts[mountPoint]; refCount > 0 {
+		s.refCountMutex.Unlock()
+		return
+	}
+	delete(s.mountTimers, mountPoint)
+	s.refCountMutex.Unlock()
+
+	if err := s.unmountMountPoint(mountPoint); err != nil {
+		log.Error().Err(err).Str("mount_point", mountPoint).Msg("Failed to unmount idle loop file")
+		return
+	}
+
+	log.Debug().Str("mount_point", mountPoint).Dur("idle_ttl", s.mountTTL).Msg("Unmounted idle loop file after inactivity")
 }
 
 // findFileInLoop searches for a file in the mounted loop filesystem and returns the actual file path.
@@ -323,7 +434,6 @@ func (s *Store) findFileInLoop(hash string) (string, error) {
 
 	return filePath, nil
 }
-
 
 // createLoopFile creates a new loop file and formats it with ext4.
 func (s *Store) createLoopFile(hash string) error {
@@ -381,7 +491,7 @@ func (s *Store) createLoopFile(hash string) error {
 		return err
 	}
 
-	log.Info().
+	log.Debug().
 		Str("loop_file", loopFilePath).
 		Int64("size_mb", s.loopFileSize).
 		Dur("dd_timeout", ddTimeout).
@@ -420,16 +530,19 @@ func (s *Store) mountLoopFile(hash string) error {
 		return err
 	}
 
-	log.Info().Str("loop_file", loopFilePath).Str("mount_point", mountPoint).Msg("Loop file mounted")
+	log.Debug().Str("loop_file", loopFilePath).Str("mount_point", mountPoint).Msg("Loop file mounted")
 	return nil
 }
 
 // unmountLoopFile unmounts a loop file from its mount point.
 func (s *Store) unmountLoopFile(hash string) error {
+	mountPoint := s.getMountPoint(hash)
+	return s.unmountMountPoint(mountPoint)
+}
+
+func (s *Store) unmountMountPoint(mountPoint string) error {
 	s.mountMutex.Lock()
 	defer s.mountMutex.Unlock()
-
-	mountPoint := s.getMountPoint(hash)
 
 	// Check if mounted
 	if !s.isMounted(mountPoint) {
@@ -447,7 +560,7 @@ func (s *Store) unmountLoopFile(hash string) error {
 		return err
 	}
 
-	log.Info().Str("mount_point", mountPoint).Msg("Loop file unmounted")
+	log.Debug().Str("mount_point", mountPoint).Msg("Loop file unmounted")
 	return nil
 }
 
@@ -495,6 +608,14 @@ func (s *Store) withMountedLoop(hash string, callback func() error) error {
 	shouldMount := s.incrementRefCount(mountPoint)
 	if shouldMount {
 		if err := s.mountLoopFile(hash); err != nil {
+			s.signalMountReady(mountPoint, err)
+			// If mount fails, decrement the reference count we just added
+			s.decrementRefCount(mountPoint)
+			return err
+		}
+		s.signalMountReady(mountPoint, nil)
+	} else {
+		if err := s.waitForMountReady(mountPoint); err != nil {
 			// If mount fails, decrement the reference count we just added
 			s.decrementRefCount(mountPoint)
 			return err
@@ -502,15 +623,7 @@ func (s *Store) withMountedLoop(hash string, callback func() error) error {
 	}
 
 	// Execute the function
-	defer func() {
-		// Decrement reference count - unmount only if this was the last reference
-		shouldUnmount := s.decrementRefCount(mountPoint)
-		if shouldUnmount {
-			if err := s.unmountLoopFile(hash); err != nil {
-				log.Error().Err(err).Str("hash", hash).Msg("Failed to unmount loop file during cleanup")
-			}
-		}
-	}()
+	defer s.decrementRefCount(mountPoint)
 
 	return callback()
 }
@@ -545,22 +658,21 @@ func (s *Store) withMountedLoopUnlocked(hash string, callback func() error) erro
 	shouldMount := s.incrementRefCount(mountPoint)
 	if shouldMount {
 		if err := s.mountLoopFile(hash); err != nil {
+			s.signalMountReady(mountPoint, err)
 			// If mount fails, decrement the reference count we just added
+			s.decrementRefCount(mountPoint)
+			return err
+		}
+		s.signalMountReady(mountPoint, nil)
+	} else {
+		if err := s.waitForMountReady(mountPoint); err != nil {
 			s.decrementRefCount(mountPoint)
 			return err
 		}
 	}
 
 	// Execute the function
-	defer func() {
-		// Decrement reference count - unmount only if this was the last reference
-		shouldUnmount := s.decrementRefCount(mountPoint)
-		if shouldUnmount {
-			if err := s.unmountLoopFile(hash); err != nil {
-				log.Error().Err(err).Str("hash", hash).Msg("Failed to unmount loop file during cleanup")
-			}
-		}
-	}()
+	defer s.decrementRefCount(mountPoint)
 
 	return callback()
 }

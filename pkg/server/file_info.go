@@ -13,7 +13,7 @@ import (
 
 func (cas *CASServer) getFileInfo(ctx echo.Context) error {
 	hash := ctx.Param("hash")
-	log.Info().Str("hash", hash).Msg("File info request")
+	log.Debug().Str("hash", hash).Msg("File info request")
 
 	fileInfo, err := cas.store.GetFileInfo(hash)
 	if err != nil {

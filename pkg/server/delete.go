@@ -15,7 +15,7 @@ import (
 func (cas *CASServer) deleteFile(ctx echo.Context) error {
 	hash := ctx.Param("hash")
 
-	log.Info().
+	log.Debug().
 		Str("hash", hash).
 		Str("method", "DELETE").
 		Str("path", ctx.Request().URL.Path).
@@ -58,7 +58,7 @@ func (cas *CASServer) deleteFile(ctx echo.Context) error {
 		}
 	}
 
-	log.Info().Str("hash", hash).Msg("File deleted successfully")
+	log.Debug().Str("hash", hash).Msg("File deleted successfully")
 	return ctx.JSON(http.StatusOK, map[string]string{
 		"message": "File deleted successfully",
 		"hash":    hash,

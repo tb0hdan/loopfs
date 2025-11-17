@@ -685,7 +685,6 @@ func (s *LoopStoreTestSuite) TestDeleteWithMountedLoop() {
 	s.IsType(store.FileNotFoundError{}, err)
 }
 
-
 // TestCleanupTempFileNil tests cleanupTempFile with nil file
 func (s *LoopStoreTestSuite) TestCleanupTempFileNil() {
 	// Test with nil file - should not panic
@@ -720,6 +719,69 @@ func (s *LoopStoreTestSuite) TestUnmountLoopFileNotMounted() {
 	// Test unmounting when not mounted - should succeed silently
 	err := s.store.unmountLoopFile(validHash)
 	s.NoError(err)
+}
+
+// TestWaitForMountReadyBlocksUntilSignaled ensures waiters block until the mount completes.
+func (s *LoopStoreTestSuite) TestWaitForMountReadyBlocksUntilSignaled() {
+	mountPoint := s.store.getMountPoint(s.testHash)
+	shouldMount := s.store.incrementRefCount(mountPoint)
+	s.True(shouldMount)
+
+	startCh := make(chan struct{})
+	errCh := make(chan error, 1)
+
+	go func() {
+		close(startCh)
+		errCh <- s.store.waitForMountReady(mountPoint)
+	}()
+
+	<-startCh
+
+	select {
+	case <-errCh:
+		s.Fail("waitForMountReady returned before the mount completed")
+	default:
+	}
+
+	s.store.signalMountReady(mountPoint, nil)
+
+	select {
+	case err := <-errCh:
+		s.NoError(err)
+	case <-time.After(500 * time.Millisecond):
+		s.Fail("waitForMountReady did not unblock after the mount completed")
+	}
+
+	s.store.decrementRefCount(mountPoint)
+}
+
+// TestWaitForMountReadyPropagatesErrors verifies that mount failures are surfaced to waiters.
+func (s *LoopStoreTestSuite) TestWaitForMountReadyPropagatesErrors() {
+	mountPoint := s.store.getMountPoint(s.testHash)
+	shouldMount := s.store.incrementRefCount(mountPoint)
+	s.True(shouldMount)
+
+	startCh := make(chan struct{})
+	errCh := make(chan error, 1)
+
+	go func() {
+		close(startCh)
+		errCh <- s.store.waitForMountReady(mountPoint)
+	}()
+
+	<-startCh
+
+	mountErr := fmt.Errorf("simulated mount failure")
+	s.store.signalMountReady(mountPoint, mountErr)
+
+	select {
+	case err := <-errCh:
+		s.EqualError(err, mountErr.Error())
+	case <-time.After(500 * time.Millisecond):
+		s.Fail("waitForMountReady did not return the mount error")
+	}
+
+	s.store.decrementRefCount(mountPoint)
 }
 
 // TestPathFunctions tests path generation functions with edge cases
@@ -766,6 +828,44 @@ func (s *LoopStoreTestSuite) TestGetFilePathEdgeCases() {
 	path = s.store.getFilePath(hash9)
 	s.Contains(path, "ef/gh") // subdirs from chars 4-6 and 6-8
 	s.Contains(path, "i")     // remaining char becomes filename
+}
+
+func TestMountCacheSchedulesIdleUnmount(t *testing.T) {
+	tempDir := t.TempDir()
+	timeoutCfg := DefaultTimeoutConfig()
+	mountTTL := 10 * time.Millisecond
+
+	store := NewWithTempDir(tempDir, filepath.Join(tempDir, "temp"), 10, timeoutCfg, mountTTL)
+	hash := "a1b2c3d4e5f67890123456789abcdef0123456789abcdef0123456789abcdef0"
+	mountPoint := store.getMountPoint(hash)
+
+	if mountPoint == "" {
+		t.Fatal("mount point should not be empty for valid hash")
+	}
+
+	if !store.incrementRefCount(mountPoint) {
+		t.Fatal("first reference should require a mount")
+	}
+	// Simulate mount completion to ensure internal state is consistent.
+	store.signalMountReady(mountPoint, nil)
+
+	store.decrementRefCount(mountPoint)
+
+	store.refCountMutex.Lock()
+	_, timerExists := store.mountTimers[mountPoint]
+	store.refCountMutex.Unlock()
+	if !timerExists {
+		t.Fatal("expected idle timer to be scheduled when refcount reached zero")
+	}
+
+	time.Sleep(5 * mountTTL)
+
+	store.refCountMutex.Lock()
+	_, timerExists = store.mountTimers[mountPoint]
+	store.refCountMutex.Unlock()
+	if timerExists {
+		t.Fatal("expected idle timer to be cleared after unmount")
+	}
 }
 
 // TestSuite runs the loop store test suite

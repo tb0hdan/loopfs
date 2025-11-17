@@ -249,6 +249,7 @@ sudo ./build/casd -storage /custom/storage -addr :8090 -web ./web -loop-size 204
 # -web: Web assets directory path (default: "web")
 # -addr: Server bind address (default: "127.0.0.1:8080")
 # -loop-size: Loop file size in MB (default: 1024)
+# -mount-ttl: Duration to keep loop mounts active after the last request (default: 5m)
 ```
 
 ### Example Operations
@@ -284,6 +285,17 @@ curl -X DELETE http://localhost:8080/file/abc123.../delete
 
 5. **View API Documentation**:
 Open http://localhost:8080 in a web browser
+
+### Automated Test Helper
+
+In addition to `docs/scripts/test_casd.sh`, there is a Go-based runner at `cmd/cas-test`. Build it with `go build ./cmd/cas-test` and execute `./cas-test` against a running `casd` instance to automatically perform:
+- A single validation pass (upload, info, download, delete).
+- Multiple sequential passes (defaults to 10).
+- Parallel `/info` calls for the same uploaded file.
+- Parallel `/info` calls for distinct files.
+- Full passes for distinct files in parallel (defaults to 10 workers).
+
+Flags exposed by `cas-test` let you change the server URL, payload size, sequential pass count, and concurrency levels, making it easy to stress-test deployments without shell scripts.
 
 ## Current Implementation Status (Updated November 16, 2025)
 

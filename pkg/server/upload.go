@@ -103,7 +103,7 @@ func (cas *CASServer) prepareUploadWithVerification(src io.Reader) (string, stri
 }
 
 func (cas *CASServer) uploadFile(ctx echo.Context) error {
-	log.Info().Msg("File upload request received")
+	log.Debug().Msg("File upload request received")
 
 	file, err := ctx.FormFile("file")
 	if err != nil {

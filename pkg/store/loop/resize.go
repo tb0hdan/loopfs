@@ -114,7 +114,7 @@ func (s *Store) syncDataBetweenLoops(mountPoint, newMountPoint string, estimated
 		return fmt.Errorf("failed to rsync data: %w (output: %s)", err, string(output))
 	}
 
-	log.Info().
+	log.Debug().
 		Str("source", sourcePath).
 		Str("dest", destPath).
 		Int64("estimated_data_size_bytes", estimatedDataSize).
@@ -188,7 +188,7 @@ func (s *Store) validateAndPrepareResize(hash string, newSize int64) (string, st
 	newLoopFilePath := loopFilePath + ".new"
 	newMountPoint := mountPoint + ".new"
 
-	log.Info().
+	log.Debug().
 		Str("hash", hash).
 		Int64("new_size_mb", newSize/bytesPerMB).
 		Str("loop_file", loopFilePath).
@@ -225,7 +225,7 @@ func (s *Store) logResizeCompletion(hash, loopFilePath string, newSize int64) {
 	if fileInfo, err := os.Stat(loopFilePath); err != nil {
 		log.Warn().Err(err).Str("loop_file", loopFilePath).Msg("Failed to stat resized loop file")
 	} else {
-		log.Info().
+		log.Debug().
 			Str("hash", hash).
 			Int64("new_size_bytes", fileInfo.Size()).
 			Int64("requested_size_bytes", newSize).
@@ -324,17 +324,17 @@ func (s *Store) ResizeBlock(hash string, newSize int64) error {
 	resizeLock.Lock()
 	defer resizeLock.Unlock()
 
-	log.Info().Str("hash", hash).Str("loop_file", loopFilePath).
+	log.Debug().Str("hash", hash).Str("loop_file", loopFilePath).
 		Msg("Acquired exclusive lock for resize operation")
 
 	// CRITICAL: Wait for all active operations to complete
 	// We must ensure no operations are using the filesystem before proceeding
 	s.waitForQuiescence(mountPoint)
 
-	log.Info().Str("hash", hash).Str("mount_point", mountPoint).
+	log.Debug().Str("hash", hash).Str("mount_point", mountPoint).
 		Msg("All active operations completed, proceeding with resize")
 
-	// Set up cleanup handler
+	// Set up a cleanup handler
 	defer s.setupCleanupHandler(loopFilePath, newLoopFilePath, newMountPoint)()
 
 	// Step 1: Mount existing loop image directly (no reference counting needed since we're exclusive)

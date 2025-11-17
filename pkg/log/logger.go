@@ -67,7 +67,6 @@ func getGoroutineIDOptimized() string {
 	return "unknown"
 }
 
-
 func init() {
 	// Configure zerolog with console writer for colored output
 	output := zerolog.ConsoleWriter{
@@ -111,4 +110,10 @@ func Debug() *zerolog.Event {
 // Fatal logs a fatal message with goroutine ID and exits.
 func Fatal() *zerolog.Event {
 	return Logger.Fatal()
+}
+
+// SetDebugMode switches the logger to debug level.
+func SetDebugMode() {
+	Logger = Logger.Level(zerolog.DebugLevel)
+	log.Logger = Logger
 }

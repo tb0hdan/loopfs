@@ -237,7 +237,6 @@ func (s *UploadTestSuite) TestUploadFileBinaryContent() {
 	s.Equal(http.StatusOK, rec.Code)
 }
 
-
 // TestCopyAndHashToTempFile tests the hash calculation and file copying
 func (s *UploadTestSuite) TestCopyAndHashToTempFile() {
 	content := "test content for hashing"

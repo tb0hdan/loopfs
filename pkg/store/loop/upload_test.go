@@ -633,7 +633,6 @@ func (s *UploadTestSuite) TestSaveFileFromPathWithinMountedLoop() {
 	s.T().Logf("saveFileFromPathWithinMountedLoop failed as expected: %v", err)
 }
 
-
 // TestUploadSuite runs the upload test suite
 func TestUploadSuite(t *testing.T) {
 	suite.Run(t, new(UploadTestSuite))

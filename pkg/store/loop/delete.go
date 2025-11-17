@@ -54,7 +54,7 @@ func (s *Store) Delete(hash string) error {
 			return err
 		}
 
-		log.Info().Str("hash", hash).Str("file_path", filePath).Msg("File deleted successfully")
+		log.Debug().Str("hash", hash).Str("file_path", filePath).Msg("File deleted successfully")
 		return nil
 	})
 }

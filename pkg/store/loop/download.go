@@ -27,7 +27,7 @@ func (s *Store) Download(hash string) (string, error) {
 
 	// Check if loop file exists (now protected by read lock)
 	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
-		log.Info().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
+		log.Debug().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
 		return "", store.FileNotFoundError{Hash: hash}
 	} else if err != nil {
 		return "", err
@@ -38,7 +38,7 @@ func (s *Store) Download(hash string) (string, error) {
 	err := s.withMountedLoopUnlocked(hash, func() error {
 		filePath, err := s.findFileInLoop(hash)
 		if err != nil {
-			log.Info().Str("hash", hash).Msg("File not found in loop")
+			log.Debug().Str("hash", hash).Msg("File not found in loop")
 			return err
 		}
 
@@ -57,7 +57,6 @@ func (s *Store) Download(hash string) (string, error) {
 
 	return tempFilePath, nil
 }
-
 
 // copyFileToTemp creates a temporary file and copies the source file content to it.
 func (s *Store) copyFileToTemp(filePath, hash string) (string, error) {
@@ -94,7 +93,7 @@ func (s *Store) copyFileToTemp(filePath, hash string) (string, error) {
 	}
 
 	tempFilePath := tempFile.Name()
-	log.Info().Str("hash", hash).Str("temp_file", tempFilePath).Msg("File copied for download")
+	log.Debug().Str("hash", hash).Str("temp_file", tempFilePath).Msg("File copied for download")
 	return tempFilePath, nil
 }
 
@@ -123,16 +122,8 @@ func (sr *streamingReader) Close() error {
 		}
 	}
 
-	// Decrement reference count and unmount if this was the last reference
-	shouldUnmount := sr.store.decrementRefCount(sr.mountPoint)
-	if shouldUnmount {
-		if err := sr.store.unmountLoopFile(sr.hash); err != nil {
-			log.Error().Err(err).Str("hash", sr.hash).Msg("Failed to unmount loop file during streaming cleanup")
-			if fileErr == nil {
-				fileErr = err
-			}
-		}
-	}
+	// Decrement reference count; actual unmount handled via idle timeout
+	sr.store.decrementRefCount(sr.mountPoint)
 
 	// Release the resize read lock now that we're done with the file
 	if sr.resizeLock != nil {
@@ -143,7 +134,7 @@ func (sr *streamingReader) Close() error {
 }
 
 // DownloadStream retrieves a file by its hash and returns a streaming reader.
-// The caller must call Close() on the returned reader to cleanup resources.
+// The caller must call Close() on the returned reader to clean up resources.
 func (s *Store) DownloadStream(hash string) (io.ReadCloser, error) {
 	hash = strings.ToLower(hash)
 	if !s.ValidateHash(hash) {
@@ -163,14 +154,14 @@ func (s *Store) DownloadStream(hash string) (io.ReadCloser, error) {
 	// Check if loop file exists under lock protection
 	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
 		resizeLock.RUnlock()
-		log.Info().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
+		log.Debug().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
 		return nil, store.FileNotFoundError{Hash: hash}
 	} else if err != nil {
 		resizeLock.RUnlock()
 		return nil, err
 	}
 
-	// Ensure loop file exists and create if needed
+	// Ensure a loop file exists and create if needed
 	if err := s.ensureLoopFileExistsUnlocked(hash); err != nil {
 		resizeLock.RUnlock()
 		return nil, err
@@ -213,7 +204,14 @@ func (s *Store) prepareMountForStreaming(hash, mountPoint string) error {
 	shouldMount := s.incrementRefCount(mountPoint)
 	if shouldMount {
 		if err := s.mountLoopFile(hash); err != nil {
+			s.signalMountReady(mountPoint, err)
 			// If mount fails, decrement the reference count we just added
+			s.decrementRefCount(mountPoint)
+			return err
+		}
+		s.signalMountReady(mountPoint, nil)
+	} else {
+		if err := s.waitForMountReady(mountPoint); err != nil {
 			s.decrementRefCount(mountPoint)
 			return err
 		}
@@ -226,20 +224,20 @@ func (s *Store) openStreamingReaderWithLock(hash, mountPoint string, resizeLock 
 	// Find and open the file within the mounted loop filesystem
 	filePath, err := s.findFileInLoop(hash)
 	if err != nil {
-		s.cleanupAfterErrorWithLock(hash, mountPoint, resizeLock)
-		log.Info().Str("hash", hash).Msg("File not found in loop")
+		s.cleanupAfterErrorWithLock(mountPoint, resizeLock)
+		log.Debug().Str("hash", hash).Msg("File not found in loop")
 		return nil, err
 	}
 
 	//nolint:gosec // filePath is constructed from validated hash, not user input
 	file, err := os.Open(filePath)
 	if err != nil {
-		s.cleanupAfterErrorWithLock(hash, mountPoint, resizeLock)
+		s.cleanupAfterErrorWithLock(mountPoint, resizeLock)
 		log.Error().Err(err).Str("file_path", filePath).Msg("Failed to open file for streaming download")
 		return nil, err
 	}
 
-	log.Info().Str("hash", hash).Str("file_path", filePath).Msg("Started streaming download")
+	log.Debug().Str("hash", hash).Str("file_path", filePath).Msg("Started streaming download")
 
 	// Return the streaming reader that will manage cleanup and lock release
 	return &streamingReader{
@@ -252,13 +250,8 @@ func (s *Store) openStreamingReaderWithLock(hash, mountPoint string, resizeLock 
 }
 
 // cleanupAfterErrorWithLock handles cleanup when streaming setup fails, including lock release.
-func (s *Store) cleanupAfterErrorWithLock(hash, mountPoint string, resizeLock *sync.RWMutex) {
-	shouldUnmount := s.decrementRefCount(mountPoint)
-	if shouldUnmount {
-		if unmountErr := s.unmountLoopFile(hash); unmountErr != nil {
-			log.Error().Err(unmountErr).Str("hash", hash).Msg("Failed to unmount loop file after error")
-		}
-	}
+func (s *Store) cleanupAfterErrorWithLock(mountPoint string, resizeLock *sync.RWMutex) {
+	s.decrementRefCount(mountPoint)
 	// Release the resize lock since we're not returning a streaming reader
 	if resizeLock != nil {
 		resizeLock.RUnlock()

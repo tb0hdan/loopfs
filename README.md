@@ -15,6 +15,19 @@ make build
 sudo build/casd -storage /data/cas -addr :8080
 ``` 
 
+Loop images stay mounted for five minutes after the last access to speed up future requests. Override this idle timeout with `-mount-ttl`, for example `-mount-ttl 10m` to cache mounts for ten minutes.
+
+## cas-test helper
+
+The `cmd/cas-test` utility mirrors the legacy `docs/scripts/test_casd.sh` workflow and adds stress scenarios. Build it with `go build ./cmd/cas-test` (or via `make build`) and run it while `casd` is serving traffic. It performs:
+- A single end-to-end upload/info/download/delete pass.
+- Multiple sequential passes (default 10).
+- Concurrent `/file/{hash}/info` requests against the same uploaded file.
+- Concurrent `/file/{hash}/info` requests for multiple unique files.
+- Parallel full passes for different files (default 10 workers).
+
+Flags like `-server`, `-size`, `-passes`, `-parallel-info`, and `-parallel-full` let you point at alternate clusters, vary the payload size, and tune concurrency.
+
 ## API Endpoints
 
 See http://localhost:8080/ for the interactive API documentation.

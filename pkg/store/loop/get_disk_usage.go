@@ -28,7 +28,7 @@ func (s *Store) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 
 	// Check if the loop file exists (now protected by read lock)
 	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
-		log.Info().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
+		log.Debug().Str("hash", hash).Str("loop_file", loopFilePath).Msg("Loop file not found")
 		return nil, store.FileNotFoundError{Hash: hash}
 	} else if err != nil {
 		return nil, err
@@ -72,9 +72,9 @@ func (s *Store) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 		log.Debug().
 			Str("hash", hash).
 			Str("mount_point", mountPoint).
-			Int64("used", int64(spaceUsed)).           //nolint:gosec // Safe for logging
+			Int64("used", int64(spaceUsed)). //nolint:gosec // Safe for logging
 			Int64("available", int64(spaceAvailable)). //nolint:gosec // Safe for logging
-			Int64("total", int64(totalSpace)).         //nolint:gosec // Safe for logging
+			Int64("total", int64(totalSpace)). //nolint:gosec // Safe for logging
 			Msg("Loop filesystem stats")
 
 		return nil

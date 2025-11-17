@@ -28,6 +28,7 @@ func main() {
 	webDir := flag.String("web", "web", "Web assets directory path")
 	addr := flag.String("addr", "127.0.0.1:8080", "Server addr")
 	loopFileSize := flag.Int64("loop-size", oneGB, "Loop file size in megabytes (defaults to 1024)")
+	debug := flag.Bool("debug", false, "Debug mode")
 
 	// Timeout configuration flags - use default values from the loop package
 	defaultTimeouts := loop.DefaultTimeoutConfig()
@@ -37,9 +38,15 @@ func main() {
 	rsyncTimeoutPerGB := flag.Duration("rsync-timeout-per-gb", defaultTimeouts.RsyncTimeoutPerGB, "Timeout per GB for rsync operations")
 	minLongTimeout := flag.Duration("min-long-timeout", defaultTimeouts.MinLongOpTimeout, "Minimum timeout for long operations")
 	maxLongTimeout := flag.Duration("max-long-timeout", defaultTimeouts.MaxLongOpTimeout, "Maximum timeout for long operations")
+	mountCacheTTL := flag.Duration("mount-ttl", loop.DefaultMountCacheTTL(), "Duration to keep loop mounts active after the last request")
 
 	flag.Parse()
 
+	// Configure logger
+	if *debug {
+		log.SetDebugMode()
+		log.Debug().Msg("Debug mode enabled")
+	}
 	// Check if running as root
 	if os.Getuid() != 0 {
 		log.Fatal().Msg("casd must be run as root")
@@ -65,7 +72,7 @@ func main() {
 		MaxLongOpTimeout:   *maxLongTimeout,
 	}
 
-	loopStore := loop.New(*storageDir, *loopFileSize, timeoutConfig)
+	loopStore := loop.New(*storageDir, *loopFileSize, timeoutConfig, *mountCacheTTL)
 	// Initialize Store Manager with default buffer size (128MB)
 	storeMgr := storemanager.New(loopStore, storemanager.DefaultBufferSize)
 	cas := server.NewCASServer(*storageDir, *webDir, strings.TrimSpace(Version), storeMgr)

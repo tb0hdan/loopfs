@@ -80,7 +80,7 @@ func (m *Manager) VerifyBlock(sourceFile string, hash string) error {
 		// Calculate new size: original disk size + file size * ResizeFactor + buffer
 		newSize := diskUsage.TotalSpace + fileSize*ResizeFactor + m.bufferSize
 
-		log.Info().
+		log.Debug().
 			Str("hash", hash).
 			Int64("current_available", diskUsage.SpaceAvailable).
 			Int64("required_space", requiredSpace).
@@ -93,7 +93,7 @@ func (m *Manager) VerifyBlock(sourceFile string, hash string) error {
 			return err
 		}
 
-		log.Info().Str("hash", hash).Int64("new_size", newSize).Msg("Block resized successfully")
+		log.Debug().Str("hash", hash).Int64("new_size", newSize).Msg("Block resized successfully")
 	}
 
 	return nil

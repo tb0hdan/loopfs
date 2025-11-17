@@ -13,7 +13,7 @@ import (
 
 // Upload stores a file from the given reader and returns its hash.
 func (s *Store) Upload(reader io.Reader, filename string) (*store.UploadResult, error) {
-	log.Info().Str("filename", filename).Msg("Processing file upload")
+	log.Debug().Str("filename", filename).Msg("Processing file upload")
 
 	hash, tempFile, err := s.processAndHashFile(reader)
 	if err != nil {
@@ -29,11 +29,11 @@ func (s *Store) Upload(reader io.Reader, filename string) (*store.UploadResult, 
 
 	if !created {
 		// File already existed, return conflict
-		log.Info().Str("hash", hash).Msg("File already exists")
+		log.Debug().Str("hash", hash).Msg("File already exists")
 		return nil, store.FileExistsError{Hash: hash}
 	}
 
-	log.Info().Str("hash", hash).Str("filename", filename).Msg("File uploaded successfully")
+	log.Debug().Str("hash", hash).Str("filename", filename).Msg("File uploaded successfully")
 	return &store.UploadResult{Hash: hash}, nil
 }
 
@@ -87,7 +87,7 @@ func (s *Store) atomicCheckAndCreate(hash string, createFunc func() error) (bool
 			return err
 		}
 		if exists {
-			log.Info().Str("hash", hash).Msg("File already exists (proper CAS deduplication)")
+			log.Debug().Str("hash", hash).Msg("File already exists (proper CAS deduplication)")
 			created = false
 			return nil // File exists, will return conflict
 		}
@@ -119,7 +119,6 @@ func (s *Store) atomicCheckAndCreateWithPath(hash, sourcePath string) (bool, err
 		return s.saveFileFromPathWithinMountedLoop(hash, sourcePath)
 	})
 }
-
 
 // existsWithinMountedLoop checks if a file exists within an already-mounted loop filesystem.
 // This assumes the loop filesystem for the hash is already mounted and does not perform mount operations.
@@ -236,11 +235,10 @@ func (s *Store) saveFileFromPathWithinMountedLoop(hash string, sourcePath string
 	return nil
 }
 
-
 // UploadWithHash stores a file using a pre-calculated hash and temp file path.
 // This method is more efficient as it avoids redundant hashing and temp file creation.
 func (s *Store) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
-	log.Info().Str("filename", filename).Str("hash", hash).Msg("Processing file upload with pre-calculated hash")
+	log.Debug().Str("filename", filename).Str("hash", hash).Msg("Processing file upload with pre-calculated hash")
 
 	// Validate the provided hash
 	if !s.ValidateHash(hash) {
@@ -256,14 +254,13 @@ func (s *Store) UploadWithHash(tempFilePath, hash, filename string) (*store.Uplo
 
 	if !created {
 		// File already existed, return conflict
-		log.Info().Str("hash", hash).Msg("File already exists")
+		log.Debug().Str("hash", hash).Msg("File already exists")
 		return nil, store.FileExistsError{Hash: hash}
 	}
 
-	log.Info().Str("hash", hash).Str("filename", filename).Msg("File uploaded successfully")
+	log.Debug().Str("hash", hash).Str("filename", filename).Msg("File uploaded successfully")
 	return &store.UploadResult{Hash: hash}, nil
 }
-
 
 // cleanupTempFile closes and removes the temporary file.
 func (s *Store) cleanupTempFile(tempFile *os.File) {
