@@ -131,6 +131,7 @@ func (cas *CASServer) setupRoutes() {
 	// Setup routes
 	cas.echo.GET("/", cas.serveSwaggerUI)
 	cas.echo.GET("/swagger.yml", cas.serveSwaggerSpec)
+	cas.echo.GET("/node/info", cas.getNodeInfo)
 	cas.echo.POST("/file/upload", cas.uploadFile)
 	cas.echo.GET("/file/:hash/download", cas.downloadFile)
 	cas.echo.GET("/file/:hash/info", cas.getFileInfo)

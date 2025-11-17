@@ -7,6 +7,84 @@ servers:
   - url: /
     description: Current server
 paths:
+  /node/info:
+    get:
+      summary: Get node system information
+      description: Returns system information including uptime, load averages, memory usage, and storage information for the storage directory
+      responses:
+        '200':
+          description: Node system information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uptime:
+                    type: string
+                    description: Human-readable uptime (e.g., "5d 3h 15m")
+                    example: "1d 2h 30m"
+                  uptime_seconds:
+                    type: integer
+                    description: Uptime in seconds
+                    example: 93000
+                  load_averages:
+                    type: object
+                    properties:
+                      load_1:
+                        type: number
+                        format: float
+                        description: 1-minute load average
+                        example: 0.15
+                      load_5:
+                        type: number
+                        format: float
+                        description: 5-minute load average
+                        example: 0.12
+                      load_15:
+                        type: number
+                        format: float
+                        description: 15-minute load average
+                        example: 0.10
+                  memory:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                        description: Total memory in bytes
+                        example: 16777216000
+                      used:
+                        type: integer
+                        description: Used memory in bytes
+                        example: 8388608000
+                      available:
+                        type: integer
+                        description: Available memory in bytes
+                        example: 8388608000
+                  storage:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                        description: Total storage space in bytes for storage directory
+                        example: 1073741824000
+                      used:
+                        type: integer
+                        description: Used storage space in bytes for storage directory
+                        example: 536870912000
+                      available:
+                        type: integer
+                        description: Available storage space in bytes for storage directory
+                        example: 536870912000
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Failed to collect node information"
   /file/upload:
     post:
       summary: Upload a file to CAS storage
@@ -267,3 +345,57 @@ components:
         space_available:
           type: integer
           description: Space available in the file's loop filesystem (bytes)
+    NodeInfo:
+      type: object
+      properties:
+        uptime:
+          type: string
+          description: Human-readable uptime
+        uptime_seconds:
+          type: integer
+          description: Uptime in seconds
+        load_averages:
+          $ref: '#/components/schemas/LoadAverages'
+        memory:
+          $ref: '#/components/schemas/MemoryInfo'
+        storage:
+          $ref: '#/components/schemas/StorageInfo'
+    LoadAverages:
+      type: object
+      properties:
+        load_1:
+          type: number
+          format: float
+          description: 1-minute load average
+        load_5:
+          type: number
+          format: float
+          description: 5-minute load average
+        load_15:
+          type: number
+          format: float
+          description: 15-minute load average
+    MemoryInfo:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Total memory in bytes
+        used:
+          type: integer
+          description: Used memory in bytes
+        available:
+          type: integer
+          description: Available memory in bytes
+    StorageInfo:
+      type: object
+      properties:
+        total:
+          type: integer
+          description: Total storage space in bytes
+        used:
+          type: integer
+          description: Used storage space in bytes
+        available:
+          type: integer
+          description: Available storage space in bytes
