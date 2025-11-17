@@ -26,6 +26,9 @@ const (
 	defaultParallelInfo     = 10
 	defaultFullPassParallel = 10
 	defaultHTTPTimeout      = 2 * time.Minute
+
+	separatorLineLength     = 80
+	microsecondsToMillis    = 1000.0
 )
 
 type config struct {
@@ -58,7 +61,7 @@ type passResult struct {
 	Hash string
 }
 
-// Operation metrics
+// Operation metrics.
 type operationMetrics struct {
 	Name     string
 	Duration time.Duration
@@ -66,7 +69,7 @@ type operationMetrics struct {
 	Error    error
 }
 
-// Step metrics for a complete test step
+// Step metrics for a complete test step.
 type stepMetrics struct {
 	Name       string
 	StartTime  time.Time
@@ -77,7 +80,7 @@ type stepMetrics struct {
 	Error      error
 }
 
-// Metrics collector for tracking all operations
+// Metrics collector for tracking all operations.
 type metricsCollector struct {
 	mu           sync.Mutex
 	steps        []stepMetrics
@@ -143,7 +146,7 @@ func (c *casClient) doRequest(ctx context.Context, method, path string, body io.
 	return respBody, nil
 }
 
-// doJSON performs a request and unmarshals JSON response
+// doJSON performs a request and unmarshals JSON response.
 func (c *casClient) doJSON(ctx context.Context, method, path string, body io.Reader, contentType string, result interface{}) error {
 	respBody, err := c.doRequest(ctx, method, path, body, contentType)
 	if err != nil {
@@ -161,10 +164,10 @@ func (c *casClient) doJSON(ctx context.Context, method, path string, body io.Rea
 
 func main() {
 	cfg := parseFlags()
-	t := newTester(cfg)
+	tester := newTester(cfg)
 
 	ctx := context.Background()
-	if err := t.run(ctx); err != nil {
+	if err := tester.run(ctx); err != nil {
 		fmt.Fprintf(os.Stderr, "cas-test failed: %v\n", err)
 		os.Exit(1)
 	}
@@ -172,10 +175,33 @@ func main() {
 	fmt.Println("\n✅ All selected test scenarios completed successfully")
 
 	// Print metrics summary
-	t.metrics.printSummary()
+	tester.metrics.printSummary()
 }
 
 func parseFlags() config {
+	flags := parseCommandLineFlags()
+	cfg := createConfigFromFlags(flags)
+	validateAndNormalizeConfig(&cfg)
+	return cfg
+}
+
+type parsedFlags struct {
+	server       *string
+	size         *int
+	timeout      *time.Duration
+	multi        *int
+	parallelInfo *int
+	fullParallel *int
+	runAll       *bool
+	step1        *bool
+	step2        *bool
+	step3        *bool
+	step4        *bool
+	step5        *bool
+	noSummary    *bool
+}
+
+func parseCommandLineFlags() parsedFlags {
 	// Server configuration
 	server := flag.String("server", defaultServerURL, "CAS server base URL")
 	size := flag.Int("size", defaultFileSize, "Test file size in bytes")
@@ -212,31 +238,62 @@ func parseFlags() config {
 
 	flag.Parse()
 
-	// Check if any specific step was selected
-	anyStepSelected := *step1 || *step2 || *step3 || *step4 || *step5
+	return parsedFlags{
+		server:       server,
+		size:         size,
+		timeout:      timeout,
+		multi:        multi,
+		parallelInfo: parallelInfo,
+		fullParallel: fullParallel,
+		runAll:       runAll,
+		step1:        step1,
+		step2:        step2,
+		step3:        step3,
+		step4:        step4,
+		step5:        step5,
+		noSummary:    noSummary,
+	}
+}
 
-	cfg := config{
-		serverURL:          strings.TrimRight(*server, "/"),
-		fileSize:           *size,
-		multiPassCount:     *multi,
-		parallelInfoCount:  *parallelInfo,
-		fullPassConcurrent: *fullParallel,
-		httpTimeout:        *timeout,
+func createConfigFromFlags(flags parsedFlags) config {
+	// Check if any specific step was selected
+	anyStepSelected := isAnyStepSelected(flags)
+
+	cfg := createBaseConfig(flags, anyStepSelected)
+	applyRunAllFlagOverride(&cfg, flags)
+
+	return cfg
+}
+
+func isAnyStepSelected(flags parsedFlags) bool {
+	return *flags.step1 || *flags.step2 || *flags.step3 || *flags.step4 || *flags.step5
+}
+
+func createBaseConfig(flags parsedFlags, anyStepSelected bool) config {
+	return config{
+		serverURL:          strings.TrimRight(*flags.server, "/"),
+		fileSize:           *flags.size,
+		multiPassCount:     *flags.multi,
+		parallelInfoCount:  *flags.parallelInfo,
+		fullPassConcurrent: *flags.fullParallel,
+		httpTimeout:        *flags.timeout,
 
 		// If no specific step is selected, run all
 		runAll:              !anyStepSelected,
-		runSinglePass:       *step1 || !anyStepSelected,
-		runMultiPass:        *step2 || !anyStepSelected,
-		runParallelInfoSame: *step3 || !anyStepSelected,
-		runParallelInfoDiff: *step4 || !anyStepSelected,
-		runFullParallel:     *step5 || !anyStepSelected,
+		runSinglePass:       *flags.step1 || !anyStepSelected,
+		runMultiPass:        *flags.step2 || !anyStepSelected,
+		runParallelInfoSame: *flags.step3 || !anyStepSelected,
+		runParallelInfoDiff: *flags.step4 || !anyStepSelected,
+		runFullParallel:     *flags.step5 || !anyStepSelected,
 
 		// Metrics configuration - summary enabled by default
-		showSummary: !*noSummary,
+		showSummary: !*flags.noSummary,
 	}
+}
 
+func applyRunAllFlagOverride(cfg *config, flags parsedFlags) {
 	// Override with -all flag if explicitly set
-	if *runAll {
+	if *flags.runAll {
 		cfg.runAll = true
 		cfg.runSinglePass = true
 		cfg.runMultiPass = true
@@ -244,7 +301,9 @@ func parseFlags() config {
 		cfg.runParallelInfoDiff = true
 		cfg.runFullParallel = true
 	}
+}
 
+func validateAndNormalizeConfig(cfg *config) {
 	if cfg.serverURL == "" {
 		cfg.serverURL = defaultServerURL
 	}
@@ -261,8 +320,6 @@ func parseFlags() config {
 	if cfg.fullPassConcurrent <= 0 {
 		cfg.fullPassConcurrent = defaultFullPassParallel
 	}
-
-	return cfg
 }
 
 func newTester(cfg config) *tester {
@@ -274,7 +331,7 @@ func newTester(cfg config) *tester {
 	return &tester{cfg: cfg, client: client, metrics: metrics}
 }
 
-// Metrics methods
+// Metrics methods.
 func (m *metricsCollector) startStep(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -302,7 +359,7 @@ func (m *metricsCollector) recordOperation(name string, duration time.Duration, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	op := operationMetrics{
+	operation := operationMetrics{
 		Name:     name,
 		Duration: duration,
 		Size:     size,
@@ -310,7 +367,7 @@ func (m *metricsCollector) recordOperation(name string, duration time.Duration, 
 	}
 
 	if m.currentStep != nil {
-		m.currentStep.Operations = append(m.currentStep.Operations, op)
+		m.currentStep.Operations = append(m.currentStep.Operations, operation)
 	}
 
 	// Update totals
@@ -340,9 +397,9 @@ func (m *metricsCollector) printSummary() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	fmt.Println("\n" + strings.Repeat("=", 80))
+	fmt.Println("\n" + strings.Repeat("=", separatorLineLength))
 	fmt.Println("METRICS SUMMARY")
-	fmt.Println(strings.Repeat("=", 80))
+	fmt.Println(strings.Repeat("=", separatorLineLength))
 
 	// Overall statistics
 	fmt.Printf("\nOverall Statistics:\n")
@@ -371,7 +428,7 @@ func (m *metricsCollector) printSummary() {
 
 		for opName, count := range opCounts {
 			avgDuration := opDurations[opName] / time.Duration(count)
-			fmt.Printf("    - %s: %d operations, avg %.3fms\n", opName, count, float64(avgDuration.Microseconds())/1000.0)
+			fmt.Printf("    - %s: %d operations, avg %.3fms\n", opName, count, float64(avgDuration.Microseconds())/microsecondsToMillis)
 		}
 
 		if step.Error != nil {
@@ -393,7 +450,7 @@ func (m *metricsCollector) printSummary() {
 		fmt.Printf("  Average throughput:   %s/s\n", formatBytes(int64(throughput)))
 	}
 
-	fmt.Println(strings.Repeat("=", 80))
+	fmt.Println(strings.Repeat("=", separatorLineLength))
 }
 
 func formatBytes(bytes int64) string {
@@ -410,100 +467,16 @@ func formatBytes(bytes int64) string {
 }
 
 func (t *tester) run(ctx context.Context) error {
+	steps := t.getTestSteps()
 	stepsRun := 0
 
-	// Step 1: Single pass
-	if t.cfg.runSinglePass {
-		fmt.Println("Step 1: Running single pass")
-		t.metrics.startStep("Step 1: Single pass")
-		_, err := t.performPass(ctx, false)
-		t.metrics.endStep(err)
-		if err != nil {
-			return fmt.Errorf("single pass failed: %w", err)
-		}
-		stepsRun++
-		fmt.Println("✓ Step 1 completed successfully")
-	}
-
-	// Step 2: Multiple sequential passes
-	if t.cfg.runMultiPass {
-		fmt.Printf("\nStep 2: Running %d sequential passes\n", t.cfg.multiPassCount)
-		t.metrics.startStep(fmt.Sprintf("Step 2: %d sequential passes", t.cfg.multiPassCount))
-		var err error
-		for i := 1; i <= t.cfg.multiPassCount; i++ {
-			fmt.Printf("  Pass %d/%d...\n", i, t.cfg.multiPassCount)
-			if _, err = t.performPass(ctx, false); err != nil {
-				t.metrics.endStep(err)
-				return fmt.Errorf("sequential pass %d failed: %w", i, err)
+	for _, step := range steps {
+		if step.shouldRun {
+			if err := step.runFunc(ctx); err != nil {
+				return err
 			}
+			stepsRun++
 		}
-		t.metrics.endStep(nil)
-		stepsRun++
-		fmt.Println("✓ Step 2 completed successfully")
-	}
-
-	// Step 3: Parallel /info requests for same file
-	if t.cfg.runParallelInfoSame {
-		fmt.Printf("\nStep 3: Running %d parallel /info requests for a single file\n", t.cfg.parallelInfoCount)
-		t.metrics.startStep(fmt.Sprintf("Step 3: %d parallel /info for same file", t.cfg.parallelInfoCount))
-		result, err := t.performPass(ctx, true)
-		if err != nil {
-			t.metrics.endStep(err)
-			return fmt.Errorf("preparing file for parallel info failed: %w", err)
-		}
-		if err := t.parallelInfoRequests(ctx, result.Hash, t.cfg.parallelInfoCount); err != nil {
-			_ = t.deleteRemoteFile(ctx, result.Hash)
-			t.metrics.endStep(err)
-			return fmt.Errorf("parallel /info (same file) failed: %w", err)
-		}
-		if err := t.deleteRemoteFile(ctx, result.Hash); err != nil {
-			t.metrics.endStep(err)
-			return fmt.Errorf("cleanup after parallel info failed: %w", err)
-		}
-		t.metrics.endStep(nil)
-		stepsRun++
-		fmt.Println("✓ Step 3 completed successfully")
-	}
-
-	// Step 4: Parallel /info requests for different files
-	if t.cfg.runParallelInfoDiff {
-		fmt.Printf("\nStep 4: Running %d parallel /info requests for different files\n", t.cfg.parallelInfoCount)
-		t.metrics.startStep(fmt.Sprintf("Step 4: %d parallel /info for different files", t.cfg.parallelInfoCount))
-		hashes := make([]string, 0, t.cfg.parallelInfoCount)
-		for i := 0; i < t.cfg.parallelInfoCount; i++ {
-			res, err := t.performPass(ctx, true)
-			if err != nil {
-				t.cleanupHashes(ctx, hashes)
-				t.metrics.endStep(err)
-				return fmt.Errorf("preparing file %d for parallel info failed: %w", i+1, err)
-			}
-			hashes = append(hashes, res.Hash)
-		}
-		if err := t.parallelInfoDifferent(ctx, hashes); err != nil {
-			t.cleanupHashes(ctx, hashes)
-			t.metrics.endStep(err)
-			return fmt.Errorf("parallel /info (different files) failed: %w", err)
-		}
-		t.cleanupHashes(ctx, hashes)
-		t.metrics.endStep(nil)
-		stepsRun++
-		fmt.Println("✓ Step 4 completed successfully")
-	}
-
-	// Step 5: Full passes in parallel
-	if t.cfg.runFullParallel {
-		fmt.Printf("\nStep 5: Running %d full passes in parallel\n", t.cfg.fullPassConcurrent)
-		t.metrics.startStep(fmt.Sprintf("Step 5: %d full passes in parallel", t.cfg.fullPassConcurrent))
-		err := runParallel(t.cfg.fullPassConcurrent, func(int) error {
-			_, err := t.performPass(ctx, false)
-			return err
-		})
-		t.metrics.endStep(err)
-		if err != nil {
-			return fmt.Errorf("parallel passes failed: %w", err)
-		}
-		stepsRun++
-		fmt.Println("✓ Step 5 completed successfully")
 	}
 
 	if stepsRun == 0 {
@@ -514,14 +487,125 @@ func (t *tester) run(ctx context.Context) error {
 	return nil
 }
 
-func (t *tester) performPass(ctx context.Context, keepRemote bool) (*passResult, error) {
-	data := make([]byte, t.cfg.fileSize)
-	if _, err := rand.Read(data); err != nil {
-		return nil, fmt.Errorf("generate random data: %w", err)
+type testStep struct {
+	shouldRun bool
+	runFunc   func(context.Context) error
+}
+
+func (t *tester) getTestSteps() []testStep {
+	return []testStep{
+		{t.cfg.runSinglePass, t.runSinglePassStep},
+		{t.cfg.runMultiPass, t.runMultiPassStep},
+		{t.cfg.runParallelInfoSame, t.runParallelInfoSameStep},
+		{t.cfg.runParallelInfoDiff, t.runParallelInfoDiffStep},
+		{t.cfg.runFullParallel, t.runFullParallelStep},
+	}
+}
+
+func (t *tester) runSinglePassStep(ctx context.Context) error {
+	fmt.Println("Step 1: Running single pass")
+	t.metrics.startStep("Step 1: Single pass")
+	_, err := t.performPass(ctx, false)
+	t.metrics.endStep(err)
+	if err != nil {
+		return fmt.Errorf("single pass failed: %w", err)
+	}
+	fmt.Println("✓ Step 1 completed successfully")
+	return nil
+}
+
+func (t *tester) runMultiPassStep(ctx context.Context) error {
+	fmt.Printf("\nStep 2: Running %d sequential passes\n", t.cfg.multiPassCount)
+	t.metrics.startStep(fmt.Sprintf("Step 2: %d sequential passes", t.cfg.multiPassCount))
+
+	for i := 1; i <= t.cfg.multiPassCount; i++ {
+		fmt.Printf("  Pass %d/%d...\n", i, t.cfg.multiPassCount)
+		if _, err := t.performPass(ctx, false); err != nil {
+			t.metrics.endStep(err)
+			return fmt.Errorf("sequential pass %d failed: %w", i, err)
+		}
+	}
+	t.metrics.endStep(nil)
+	fmt.Println("✓ Step 2 completed successfully")
+	return nil
+}
+
+func (t *tester) runParallelInfoSameStep(ctx context.Context) error {
+	fmt.Printf("\nStep 3: Running %d parallel /info requests for a single file\n", t.cfg.parallelInfoCount)
+	t.metrics.startStep(fmt.Sprintf("Step 3: %d parallel /info for same file", t.cfg.parallelInfoCount))
+
+	result, err := t.performPass(ctx, true)
+	if err != nil {
+		t.metrics.endStep(err)
+		return fmt.Errorf("preparing file for parallel info failed: %w", err)
 	}
 
-	sum := sha256.Sum256(data)
-	expectedHash := hex.EncodeToString(sum[:])
+	if err := t.parallelInfoRequests(ctx, result.Hash, t.cfg.parallelInfoCount); err != nil {
+		_ = t.deleteRemoteFile(ctx, result.Hash)
+		t.metrics.endStep(err)
+		return fmt.Errorf("parallel /info (same file) failed: %w", err)
+	}
+
+	if err := t.deleteRemoteFile(ctx, result.Hash); err != nil {
+		t.metrics.endStep(err)
+		return fmt.Errorf("cleanup after parallel info failed: %w", err)
+	}
+
+	t.metrics.endStep(nil)
+	fmt.Println("✓ Step 3 completed successfully")
+	return nil
+}
+
+func (t *tester) runParallelInfoDiffStep(ctx context.Context) error {
+	fmt.Printf("\nStep 4: Running %d parallel /info requests for different files\n", t.cfg.parallelInfoCount)
+	t.metrics.startStep(fmt.Sprintf("Step 4: %d parallel /info for different files", t.cfg.parallelInfoCount))
+
+	hashes := make([]string, 0, t.cfg.parallelInfoCount)
+	for i := range t.cfg.parallelInfoCount {
+		result, err := t.performPass(ctx, true)
+		if err != nil {
+			t.cleanupHashes(ctx, hashes)
+			t.metrics.endStep(err)
+			return fmt.Errorf("preparing file %d for parallel info failed: %w", i+1, err)
+		}
+		hashes = append(hashes, result.Hash)
+	}
+
+	if err := t.parallelInfoDifferent(ctx, hashes); err != nil {
+		t.cleanupHashes(ctx, hashes)
+		t.metrics.endStep(err)
+		return fmt.Errorf("parallel /info (different files) failed: %w", err)
+	}
+
+	t.cleanupHashes(ctx, hashes)
+	t.metrics.endStep(nil)
+	fmt.Println("✓ Step 4 completed successfully")
+	return nil
+}
+
+func (t *tester) runFullParallelStep(ctx context.Context) error {
+	fmt.Printf("\nStep 5: Running %d full passes in parallel\n", t.cfg.fullPassConcurrent)
+	t.metrics.startStep(fmt.Sprintf("Step 5: %d full passes in parallel", t.cfg.fullPassConcurrent))
+
+	err := runParallel(t.cfg.fullPassConcurrent, func(int) error {
+		_, testErr := t.performPass(ctx, false)
+		return testErr
+	})
+
+	t.metrics.endStep(err)
+	if err != nil {
+		return fmt.Errorf("parallel passes failed: %w", err)
+	}
+
+	fmt.Println("✓ Step 5 completed successfully")
+	return nil
+}
+
+func (t *tester) performPass(ctx context.Context, keepRemote bool) (*passResult, error) {
+	data, expectedHash, err := t.prepareTestData()
+	if err != nil {
+		return nil, err
+	}
 
 	hash, err := t.uploadFile(ctx, data)
 	if err != nil {
@@ -531,33 +615,52 @@ func (t *tester) performPass(ctx context.Context, keepRemote bool) (*passResult,
 	cleanup := true
 	defer func() {
 		if cleanup && hash != "" {
-			if err := t.deleteRemoteFile(ctx, hash); err != nil {
-				fmt.Fprintf(os.Stderr, "failed to cleanup remote hash %s: %v\n", hash, err)
+			if deleteErr := t.deleteRemoteFile(ctx, hash); deleteErr != nil {
+				fmt.Fprintf(os.Stderr, "failed to cleanup remote hash %s: %v\n", hash, deleteErr)
 			}
 		}
 	}()
 
+	if err := t.verifyUploadedFile(ctx, hash, expectedHash, data); err != nil {
+		return nil, err
+	}
+
+	return t.finishPass(ctx, hash, keepRemote, &cleanup)
+}
+
+func (t *tester) prepareTestData() ([]byte, string, error) {
+	data := make([]byte, t.cfg.fileSize)
+	if _, err := rand.Read(data); err != nil {
+		return nil, "", fmt.Errorf("generate random data: %w", err)
+	}
+
+	sum := sha256.Sum256(data)
+	expectedHash := hex.EncodeToString(sum[:])
+	return data, expectedHash, nil
+}
+
+func (t *tester) verifyUploadedFile(ctx context.Context, hash, expectedHash string, data []byte) error {
 	if hash != expectedHash {
-		return nil, fmt.Errorf("hash mismatch: expected %s, got %s", expectedHash, hash)
+		return fmt.Errorf("hash mismatch: expected %s, got %s", expectedHash, hash)
 	}
 
 	if err := t.fetchInfo(ctx, hash); err != nil {
-		return nil, err
+		return err
 	}
 
-	if err := t.verifyDownload(ctx, hash, data); err != nil {
-		return nil, err
-	}
+	return t.verifyDownload(ctx, hash, data)
+}
 
+func (t *tester) finishPass(ctx context.Context, hash string, keepRemote bool, cleanup *bool) (*passResult, error) {
 	if keepRemote {
-		cleanup = false
+		*cleanup = false
 		return &passResult{Hash: hash}, nil
 	}
 
 	if err := t.deleteRemoteFile(ctx, hash); err != nil {
 		return nil, err
 	}
-	cleanup = false
+	*cleanup = false
 	return &passResult{Hash: hash}, nil
 }
 
@@ -674,21 +777,21 @@ func (t *tester) cleanupHashes(ctx context.Context, hashes []string) {
 	}
 }
 
-func runParallel(count int, fn func(int) error) error {
-	var wg sync.WaitGroup
+func runParallel(count int, function func(int) error) error {
+	var waitGroup sync.WaitGroup
 	errCh := make(chan error, count)
 
-	for i := 0; i < count; i++ {
-		wg.Add(1)
+	for index := range count {
+		waitGroup.Add(1)
 		go func(idx int) {
-			defer wg.Done()
-			if err := fn(idx); err != nil {
+			defer waitGroup.Done()
+			if err := function(idx); err != nil {
 				errCh <- err
 			}
-		}(i)
+		}(index)
 	}
 
-	wg.Wait()
+	waitGroup.Wait()
 	close(errCh)
 
 	for err := range errCh {
