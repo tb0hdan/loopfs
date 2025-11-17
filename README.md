@@ -43,3 +43,9 @@ For example, a file with the SHA256 hash `abcdef1234567890...` would be stored i
 ```
 
 Where `/data/cas/ab/cd/loop.img` is the loop file for the content. It gets created on the first upload of the content.
+
+## Documentation
+
+- **[Loop Store Architecture](docs/LOOP_STORE_ARCHITECTURE.md)** - Comprehensive documentation of the loop filesystem-based storage system, including architecture diagrams, data flow charts, and technical implementation details.
+- **[Project Notes](docs/PROJECT_NOTES.md)** - Project overview, current implementation status, and development history.
+- **[CAS test utility and sample metrics](docs/cas-test-metrics-demo.md)** - Documentation on the cas-test utility, including usage instructions and sample performance metrics.

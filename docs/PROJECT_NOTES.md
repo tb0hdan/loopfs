@@ -503,6 +503,22 @@ The project has been completely rewritten to implement a **loop filesystem-based
 3. **Monitoring Integration**: Add structured metrics for operational visibility
 4. **Error Recovery**: Enhanced resilience for mount operation failures
 
+## Documentation
+
+### Available Documentation
+
+- **[Loop Store Architecture](LOOP_STORE_ARCHITECTURE.md)** - Comprehensive technical documentation covering:
+  - Complete system architecture with detailed diagrams
+  - Hash-based file organization and loop filesystem management
+  - Concurrency control and thread safety mechanisms
+  - Data flow diagrams for all major operations (upload, download, delete)
+  - Performance characteristics and benchmarking results
+  - Security model and attack vector mitigation
+  - Error handling patterns and recovery mechanisms
+  - Memory management and resource cleanup strategies
+
+- **[Project Notes](PROJECT_NOTES.md)** - This file, containing project overview, implementation status, and development history
+
 ## Future Enhancements
 
 Potential improvements for the CAS server:
