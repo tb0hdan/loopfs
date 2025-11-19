@@ -4,7 +4,7 @@
 
 [![Go Version](https://img.shields.io/badge/go-1.25+-blue.svg)](https://golang.org)
 [![Platform](https://img.shields.io/badge/platform-linux-green.svg)](https://www.linux.org)
-[![License]([https://img.shields.io/badge/BSD-3-Clause](LICENSE)
+[![License](https://img.shields.io/badge/BSD-3-Clause)](LICENSE)
 
 ## Overview
 
