@@ -43,7 +43,9 @@ func (s *ServerTestSuite) SetupTest() {
 		10*time.Second,       // gracefulShutdownTimeout
 		100*time.Millisecond, // retryWaitMin
 		500*time.Millisecond, // retryWaitMax
-		5*time.Second,        // requestTimeout
+		5*time.Second,        // requestTimeout,
+		false,
+		"",
 	)
 }
 
@@ -56,7 +58,8 @@ func (s *ServerTestSuite) TestNewBalancerServer() {
 	retryWaitMax := 1 * time.Second
 	requestTimeout := 10 * time.Second
 
-	server := NewBalancerServer(backendList, retryMax, gracefulShutdownTimeout, retryWaitMin, retryWaitMax, requestTimeout)
+	server := NewBalancerServer(backendList, retryMax, gracefulShutdownTimeout, retryWaitMin, retryWaitMax,
+		requestTimeout, false, "")
 
 	s.NotNil(server)
 	s.Equal(backendList, server.backendList)
@@ -78,6 +81,8 @@ func (s *ServerTestSuite) TestServerDefaultSettings() {
 		100*time.Millisecond,
 		1*time.Second,
 		30*time.Second,
+		false,
+		"",
 	)
 
 	s.NotNil(server.echo)
@@ -213,6 +218,8 @@ func (s *ServerTestSuite) TestServerConfiguration() {
 				tc.retryWaitMin,
 				tc.retryWaitMax,
 				tc.requestTimeout,
+				false,
+				"",
 			)
 
 			s.Equal(tc.backendList, server.backendList)
@@ -235,6 +242,8 @@ func (s *ServerTestSuite) TestServerWithInvalidBackends() {
 		100*time.Millisecond,
 		1*time.Second,
 		30*time.Second,
+		false,
+		"",
 	)
 
 	// Server should still be created successfully
@@ -314,6 +323,8 @@ func (s *ServerTestSuite) TestServerZeroTimeouts() {
 		0, // zero retry wait min
 		0, // zero retry wait max
 		0, // zero request timeout
+		false,
+		"",
 	)
 
 	s.NotNil(server)

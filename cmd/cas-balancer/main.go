@@ -30,6 +30,7 @@ func main() {
 	retryWaitMax := flag.Duration("retry-wait-max", defaultRetryWaitMax, "Maximum wait time between retries")
 	requestTimeout := flag.Duration("request-timeout", defaultRequestTimeout, "Request timeout")
 	debug := flag.Bool("debug", false, "Enable debug logging")
+	debugAddr := flag.String("debug-addr", "localhost:6060", "Debug server address (pprof)")
 
 	flag.Parse()
 
@@ -53,7 +54,8 @@ func main() {
 	}
 
 	log.Info().Strs("backends", backendList).Msg("Configured backends")
-	bServer := balancer.NewBalancerServer(backendList, *retryMax, gracefulShutdownTimeout, *retryWaitMin, *retryWaitMax, *requestTimeout)
+	bServer := balancer.NewBalancerServer(backendList, *retryMax, gracefulShutdownTimeout, *retryWaitMin, *retryWaitMax,
+		*requestTimeout, *debug, *debugAddr)
 	if err := bServer.Start(*addr); err != nil {
 		log.Fatal().Err(err).Msg("Server failed to start")
 	}
