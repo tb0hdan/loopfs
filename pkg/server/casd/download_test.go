@@ -1,4 +1,4 @@
-package server
+package casd
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
@@ -39,7 +40,7 @@ func (s *DownloadTestSuite) TearDownSuite() {
 // SetupTest runs before each test
 func (s *DownloadTestSuite) SetupTest() {
 	s.mockStore = NewMockStore()
-	s.server = NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", s.mockStore)
+	s.server = NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", s.mockStore, false, "")
 	s.server.setupRoutes()
 }
 
@@ -223,7 +224,7 @@ type MockStoreDownloadError struct {
 	errorType string
 }
 
-func (m *MockStoreDownloadError) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+func (m *MockStoreDownloadError) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
 	return m.MockStore.UploadWithHash(tempFilePath, hash, filename)
 }
 
@@ -246,7 +247,7 @@ func (s *DownloadTestSuite) TestDownloadFileStoreError() {
 		MockStore: NewMockStore(),
 		errorType: "generic",
 	}
-	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -281,7 +282,7 @@ type MockStoreCloseError struct {
 	*MockStore
 }
 
-func (m *MockStoreCloseError) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+func (m *MockStoreCloseError) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
 	return m.MockStore.UploadWithHash(tempFilePath, hash, filename)
 }
 
@@ -296,7 +297,7 @@ func (m *MockStoreCloseError) DownloadStream(hash string) (io.ReadCloser, error)
 // TestDownloadFileCloseError tests download when reader close fails
 func (s *DownloadTestSuite) TestDownloadFileCloseError() {
 	mockStore := &MockStoreCloseError{MockStore: NewMockStore()}
-	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -481,7 +482,7 @@ func (s *DownloadTestSuite) TestDownloadFileErrorHandling() {
 		s.Run(tc.name, func() {
 			mockStore := NewMockStore()
 			tc.setupStore(mockStore)
-			server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore)
+			server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore, false, "")
 			server.setupRoutes()
 
 			req := httptest.NewRequest(http.MethodGet, "/file/"+tc.hash+"/download", nil)

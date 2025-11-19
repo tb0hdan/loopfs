@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"loopfs/pkg/models"
+
 	"github.com/stretchr/testify/suite"
 )
 
@@ -25,7 +27,7 @@ func (s *StoreTestSuite) TearDownTest() {
 // TestFileInfo tests the FileInfo struct
 func (s *StoreTestSuite) TestFileInfo() {
 	now := time.Now()
-	fileInfo := &FileInfo{
+	fileInfo := &models.FileInfo{
 		Hash:      "abcd1234567890",
 		Size:      1024,
 		CreatedAt: now,
@@ -36,9 +38,9 @@ func (s *StoreTestSuite) TestFileInfo() {
 	s.Equal(now, fileInfo.CreatedAt)
 }
 
-// TestDiskUsage tests the DiskUsage struct
+// Testmodels.DiskUsage tests the models.DiskUsage struct
 func (s *StoreTestSuite) TestDiskUsage() {
-	usage := &DiskUsage{
+	usage := &models.DiskUsage{
 		SpaceUsed:      1024 * 1024,
 		SpaceAvailable: 10 * 1024 * 1024,
 		TotalSpace:     11 * 1024 * 1024,
@@ -49,9 +51,9 @@ func (s *StoreTestSuite) TestDiskUsage() {
 	s.Equal(int64(11*1024*1024), usage.TotalSpace)
 }
 
-// TestUploadResult tests the UploadResult struct
-func (s *StoreTestSuite) TestUploadResult() {
-	result := &UploadResult{
+// Testmodels.UploadResponse tests the models.UploadResponse struct
+func (s *StoreTestSuite) TestUploadResponse() {
+	result := &models.UploadResponse{
 		Hash: "abcd1234567890",
 	}
 

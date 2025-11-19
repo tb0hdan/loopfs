@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"loopfs/pkg/log"
-	"loopfs/pkg/server"
+	"loopfs/pkg/server/casd"
 	"loopfs/pkg/store/loop"
 	"loopfs/pkg/storemanager"
 )
@@ -29,6 +29,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "Server addr")
 	loopFileSize := flag.Int64("loop-size", oneGB, "Loop file size in megabytes (defaults to 1024)")
 	debug := flag.Bool("debug", false, "Debug mode")
+	debugAddr := flag.String("debug-addr", "localhost:6060", "Debug server address (pprof)")
 
 	// Timeout configuration flags - use default values from the loop package
 	defaultTimeouts := loop.DefaultTimeoutConfig()
@@ -73,9 +74,9 @@ func main() {
 	}
 
 	loopStore := loop.New(*storageDir, *loopFileSize, timeoutConfig, *mountCacheTTL)
-	// Initialize Store Manager with default buffer size (128MB)
+	// Initialize Store Manager with the default buffer size (128MB)
 	storeMgr := storemanager.New(loopStore, storemanager.DefaultBufferSize)
-	cas := server.NewCASServer(*storageDir, *webDir, strings.TrimSpace(Version), storeMgr)
+	cas := casd.NewCASServer(*storageDir, *webDir, strings.TrimSpace(Version), storeMgr, *debug, *debugAddr)
 
 	if err := cas.Start(*addr); err != nil {
 		log.Fatal().Err(err).Msg("Server failed to start")

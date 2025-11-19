@@ -16,15 +16,19 @@ test: build-dir
 	@go test -v ./... -coverprofile=build/coverage.out
 	@go tool cover -html=build/coverage.out -o build/coverage.html
 
-build: casd cas-test
+build: casd cas-test cas-balancer
 
 casd:
-	@echo "Building the project..."
+	@echo "Building the casd binary..."
 	@go build -o build/casd cmd/casd/*.go
 
 cas-test:
 	@echo "Building the test tool..."
 	@go build -o build/cas-test cmd/cas-test/*.go
+
+cas-balancer:
+	@echo "Building the load balancer..."
+	@go build -o build/cas-balancer cmd/cas-balancer/*.go
 
 tools:
 	@echo "Running tools..."

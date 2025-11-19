@@ -1,4 +1,4 @@
-package server
+package casd
 
 import (
 	"crypto/sha256"
@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"loopfs/pkg/log"
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 
 	"github.com/labstack/echo/v4"
@@ -137,7 +138,7 @@ func (cas *CASServer) uploadFile(ctx echo.Context) error {
 }
 
 // processUpload handles the core upload logic with store manager verification.
-func (cas *CASServer) processUpload(src io.Reader, filename string) (*store.UploadResult, error) {
+func (cas *CASServer) processUpload(src io.Reader, filename string) (*models.UploadResponse, error) {
 	// If we have a Store Manager, use the efficient single-pass upload flow
 	if cas.storeMgr != nil {
 		hash, tempPath, cleanup, prepErr := cas.prepareUploadWithVerification(src)

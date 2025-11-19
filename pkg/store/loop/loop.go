@@ -119,6 +119,13 @@ func NewWithDefaults(storageDir string, loopFileSize int64) *Store {
 	return New(storageDir, loopFileSize, DefaultTimeoutConfig(), DefaultMountCacheTTL())
 }
 
+// UnmountAll unmounts all currently mounted loop images.
+// This is called during server shutdown to ensure clean unmounting.
+func (s *Store) UnmountAll() error {
+	mountPoints := s.collectMountPoints()
+	return s.unmountAllMountPoints(mountPoints)
+}
+
 // ensureTempDir creates the temp directory if it doesn't exist.
 func (s *Store) ensureTempDir() error {
 	if err := os.MkdirAll(s.tempDir, dirPerm); err != nil {
@@ -675,4 +682,52 @@ func (s *Store) withMountedLoopUnlocked(hash string, callback func() error) erro
 	defer s.decrementRefCount(mountPoint)
 
 	return callback()
+}
+
+// collectMountPoints gathers all mount points that need to be unmounted.
+func (s *Store) collectMountPoints() []string {
+	s.refCountMutex.Lock()
+	defer s.refCountMutex.Unlock()
+
+	// Use a map to avoid duplicates
+	mountPointMap := make(map[string]bool)
+
+	// Add mount points with non-zero reference counts
+	for mountPoint, refCount := range s.refCounts {
+		if refCount > 0 {
+			mountPointMap[mountPoint] = true
+		}
+	}
+
+	// Add mount points with scheduled unmount timers (idle mounts)
+	for mountPoint, timer := range s.mountTimers {
+		mountPointMap[mountPoint] = true
+		timer.Stop()
+	}
+
+	// Clear all tracking maps
+	s.refCounts = make(map[string]int)
+	s.mountTimers = make(map[string]*time.Timer)
+
+	// Convert map to slice
+	mountPoints := make([]string, 0, len(mountPointMap))
+	for mountPoint := range mountPointMap {
+		mountPoints = append(mountPoints, mountPoint)
+	}
+
+	return mountPoints
+}
+
+// unmountAllMountPoints unmounts a list of mount points.
+func (s *Store) unmountAllMountPoints(mountPoints []string) error {
+	var lastErr error
+	for _, mountPoint := range mountPoints {
+		log.Debug().Str("mount_point", mountPoint).Msg("Unmounting loop image during shutdown")
+		if err := s.unmountMountPoint(mountPoint); err != nil {
+			log.Error().Err(err).Str("mount_point", mountPoint).Msg("Failed to unmount loop image during shutdown")
+			lastErr = err
+			// Continue unmounting others even if one fails
+		}
+	}
+	return lastErr
 }

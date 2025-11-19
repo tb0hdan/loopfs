@@ -1,4 +1,4 @@
-package server
+package casd
 
 import (
 	"encoding/json"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
@@ -38,7 +39,7 @@ func (s *DeleteTestSuite) TearDownSuite() {
 // SetupTest runs before each test
 func (s *DeleteTestSuite) SetupTest() {
 	s.mockStore = NewMockStore()
-	s.server = NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", s.mockStore)
+	s.server = NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", s.mockStore, false, "")
 	s.server.setupRoutes()
 }
 
@@ -232,7 +233,7 @@ func (s *DeleteTestSuite) TestDeleteFileHashNormalization() {
 			// Reset mock store for each test
 			mockStore := NewMockStore()
 			mockStore.files[tc.storeHash] = []byte("test content")
-			server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore)
+			server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore, false, "")
 			server.setupRoutes()
 
 			req := httptest.NewRequest(http.MethodDelete, "/file/"+tc.inputHash+"/delete", nil)
@@ -259,7 +260,7 @@ type MockStoreDeleteError struct {
 	errorType string
 }
 
-func (m *MockStoreDeleteError) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+func (m *MockStoreDeleteError) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
 	return m.MockStore.UploadWithHash(tempFilePath, hash, filename)
 }
 
@@ -282,7 +283,7 @@ func (s *DeleteTestSuite) TestDeleteFileStoreInvalidHashError() {
 		MockStore: NewMockStore(),
 		errorType: "invalid_hash",
 	}
-	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -309,7 +310,7 @@ func (s *DeleteTestSuite) TestDeleteFileStoreGenericError() {
 		MockStore: NewMockStore(),
 		errorType: "generic",
 	}
-	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"

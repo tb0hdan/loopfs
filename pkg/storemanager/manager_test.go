@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
 
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
@@ -19,25 +20,20 @@ type MockResizableStore struct {
 	mock.Mock
 }
 
-func (m *MockResizableStore) Upload(reader io.Reader, filename string) (*store.UploadResult, error) {
+func (m *MockResizableStore) Upload(reader io.Reader, filename string) (*models.UploadResponse, error) {
 	args := m.Called(reader, filename)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*store.UploadResult), args.Error(1)
+	return args.Get(0).(*models.UploadResponse), args.Error(1)
 }
 
-func (m *MockResizableStore) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+func (m *MockResizableStore) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
 	args := m.Called(tempFilePath, hash, filename)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*store.UploadResult), args.Error(1)
-}
-
-func (m *MockResizableStore) Download(hash string) (string, error) {
-	args := m.Called(hash)
-	return args.String(0), args.Error(1)
+	return args.Get(0).(*models.UploadResponse), args.Error(1)
 }
 
 func (m *MockResizableStore) DownloadStream(hash string) (io.ReadCloser, error) {
@@ -48,12 +44,12 @@ func (m *MockResizableStore) DownloadStream(hash string) (io.ReadCloser, error) 
 	return args.Get(0).(io.ReadCloser), args.Error(1)
 }
 
-func (m *MockResizableStore) GetFileInfo(hash string) (*store.FileInfo, error) {
+func (m *MockResizableStore) GetFileInfo(hash string) (*models.FileInfo, error) {
 	args := m.Called(hash)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*store.FileInfo), args.Error(1)
+	return args.Get(0).(*models.FileInfo), args.Error(1)
 }
 
 func (m *MockResizableStore) Exists(hash string) (bool, error) {
@@ -71,12 +67,12 @@ func (m *MockResizableStore) Delete(hash string) error {
 	return args.Error(0)
 }
 
-func (m *MockResizableStore) GetDiskUsage(hash string) (*store.DiskUsage, error) {
+func (m *MockResizableStore) GetDiskUsage(hash string) (*models.DiskUsage, error) {
 	args := m.Called(hash)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).(*store.DiskUsage), args.Error(1)
+	return args.Get(0).(*models.DiskUsage), args.Error(1)
 }
 
 func (m *MockResizableStore) ResizeBlock(hash string, newSize int64) error {
@@ -188,7 +184,7 @@ func (s *ManagerTestSuite) TestVerifyBlockSufficientSpace() {
 	fileSize := fileInfo.Size()
 
 	// Mock disk usage with sufficient space
-	diskUsage := &store.DiskUsage{
+	diskUsage := &models.DiskUsage{
 		SpaceUsed:      1024,
 		SpaceAvailable: fileSize + DefaultBufferSize + 1000, // More than required
 		TotalSpace:     2048 + fileSize + DefaultBufferSize,
@@ -207,7 +203,7 @@ func (s *ManagerTestSuite) TestVerifyBlockInsufficientSpace() {
 	fileSize := fileInfo.Size()
 
 	// Mock disk usage with insufficient space
-	diskUsage := &store.DiskUsage{
+	diskUsage := &models.DiskUsage{
 		SpaceUsed:      512,
 		SpaceAvailable: fileSize + DefaultBufferSize - 100, // Less than required
 		TotalSpace:     1024,
@@ -230,7 +226,7 @@ func (s *ManagerTestSuite) TestVerifyBlockResizeError() {
 	fileSize := fileInfo.Size()
 
 	// Mock disk usage with insufficient space
-	diskUsage := &store.DiskUsage{
+	diskUsage := &models.DiskUsage{
 		SpaceUsed:      512,
 		SpaceAvailable: fileSize + DefaultBufferSize - 100, // Less than required
 		TotalSpace:     1024,
@@ -250,7 +246,7 @@ func (s *ManagerTestSuite) TestVerifyBlockResizeError() {
 func (s *ManagerTestSuite) TestUpload() {
 	reader := strings.NewReader("test content")
 	filename := "test.txt"
-	expectedResult := &store.UploadResult{Hash: s.testHash}
+	expectedResult := &models.UploadResponse{Hash: s.testHash}
 
 	s.mockStore.On("Upload", reader, filename).Return(expectedResult, nil)
 
@@ -270,27 +266,6 @@ func (s *ManagerTestSuite) TestUploadError() {
 	s.Error(err)
 	s.Nil(result)
 	s.Contains(err.Error(), "upload error")
-}
-
-// TestDownload tests Download delegation
-func (s *ManagerTestSuite) TestDownload() {
-	expectedPath := "/path/to/file"
-
-	s.mockStore.On("Download", s.testHash).Return(expectedPath, nil)
-
-	path, err := s.manager.Download(s.testHash)
-	s.NoError(err)
-	s.Equal(expectedPath, path)
-}
-
-// TestDownloadError tests Download delegation with error
-func (s *ManagerTestSuite) TestDownloadError() {
-	s.mockStore.On("Download", s.testHash).Return("", errors.New("download error"))
-
-	path, err := s.manager.Download(s.testHash)
-	s.Error(err)
-	s.Empty(path)
-	s.Contains(err.Error(), "download error")
 }
 
 // TestDownloadStream tests DownloadStream delegation
@@ -316,7 +291,7 @@ func (s *ManagerTestSuite) TestDownloadStreamError() {
 
 // TestGetFileInfo tests GetFileInfo delegation
 func (s *ManagerTestSuite) TestGetFileInfo() {
-	expectedFileInfo := &store.FileInfo{
+	expectedFileInfo := &models.FileInfo{
 		Hash:      s.testHash,
 		Size:      1024,
 		CreatedAt: time.Now(),
@@ -394,7 +369,7 @@ func (s *ManagerTestSuite) TestDeleteError() {
 
 // TestGetDiskUsage tests GetDiskUsage delegation
 func (s *ManagerTestSuite) TestGetDiskUsage() {
-	expectedDiskUsage := &store.DiskUsage{
+	expectedDiskUsage := &models.DiskUsage{
 		SpaceUsed:      1024,
 		SpaceAvailable: 2048,
 		TotalSpace:     3072,
@@ -454,7 +429,7 @@ func (s *ManagerTestSuite) TestVerifyBlockCustomBufferSize() {
 	fileSize := fileInfo.Size()
 
 	// Mock disk usage with insufficient space
-	diskUsage := &store.DiskUsage{
+	diskUsage := &models.DiskUsage{
 		SpaceUsed:      512,
 		SpaceAvailable: fileSize + customBufferSize - 100, // Less than required
 		TotalSpace:     1024,
@@ -478,7 +453,7 @@ func (s *ManagerTestSuite) TestVerifyBlockExactSpaceMatch() {
 
 	// Mock disk usage with exactly the required space
 	requiredSpace := fileSize + DefaultBufferSize
-	diskUsage := &store.DiskUsage{
+	diskUsage := &models.DiskUsage{
 		SpaceUsed:      1024,
 		SpaceAvailable: requiredSpace, // Exactly what's required
 		TotalSpace:     1024 + requiredSpace,
@@ -505,7 +480,7 @@ func (s *ManagerTestSuite) TestVerifyBlockLargeFile() {
 	fileSize := int64(len(content))
 
 	// Mock disk usage with insufficient space
-	diskUsage := &store.DiskUsage{
+	diskUsage := &models.DiskUsage{
 		SpaceUsed:      512,
 		SpaceAvailable: fileSize / 2, // Much less than required
 		TotalSpace:     1024,
@@ -578,7 +553,7 @@ func (s *ManagerTestSuite) TestVerifyBlockEdgeCases() {
 	emptyFile.Close()
 
 	// For empty file, available space should be sufficient even if small
-	diskUsage := &store.DiskUsage{
+	diskUsage := &models.DiskUsage{
 		SpaceUsed:      100,
 		SpaceAvailable: DefaultBufferSize + 1000, // Should be sufficient
 		TotalSpace:     DefaultBufferSize + 1100,

@@ -1,4 +1,4 @@
-package server
+package casd
 
 import (
 	"bufio"
@@ -10,39 +10,10 @@ import (
 	"time"
 
 	"loopfs/pkg/log"
+	"loopfs/pkg/models"
 
 	"github.com/labstack/echo/v4"
 )
-
-// NodeInfo represents system information for the node.
-type NodeInfo struct {
-	Uptime        string         `json:"uptime"`
-	UptimeSeconds int64          `json:"uptime_seconds"`
-	LoadAverages  LoadAverages   `json:"load_averages"`
-	Memory        MemoryInfo     `json:"memory"`
-	Storage       StorageInfo    `json:"storage"`
-}
-
-// LoadAverages represents system load information.
-type LoadAverages struct {
-	Load1  float64 `json:"load_1"`
-	Load5  float64 `json:"load_5"`
-	Load15 float64 `json:"load_15"`
-}
-
-// MemoryInfo represents memory usage information.
-type MemoryInfo struct {
-	Total     uint64 `json:"total"`
-	Used      uint64 `json:"used"`
-	Available uint64 `json:"available"`
-}
-
-// StorageInfo represents disk usage information for the storage directory.
-type StorageInfo struct {
-	Total     uint64 `json:"total"`
-	Used      uint64 `json:"used"`
-	Available uint64 `json:"available"`
-}
 
 // getNodeInfo handles the GET /node/info endpoint.
 func (cas *CASServer) getNodeInfo(ctx echo.Context) error {
@@ -58,7 +29,7 @@ func (cas *CASServer) getNodeInfo(ctx echo.Context) error {
 }
 
 // collectNodeInfo gathers system information.
-func (cas *CASServer) collectNodeInfo() (*NodeInfo, error) {
+func (cas *CASServer) collectNodeInfo() (*models.NodeInfo, error) {
 	uptime, err := getUptime()
 	if err != nil {
 		return nil, err
@@ -79,7 +50,7 @@ func (cas *CASServer) collectNodeInfo() (*NodeInfo, error) {
 		return nil, err
 	}
 
-	return &NodeInfo{
+	return &models.NodeInfo{
 		Uptime:        formatUptime(uptime),
 		UptimeSeconds: uptime,
 		LoadAverages:  *loadAvg,
@@ -109,7 +80,7 @@ func getUptime() (int64, error) {
 }
 
 // getLoadAverages reads load averages from /proc/loadavg.
-func getLoadAverages() (*LoadAverages, error) {
+func getLoadAverages() (*models.LoadAverages, error) {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
 		return nil, err
@@ -136,7 +107,7 @@ func getLoadAverages() (*LoadAverages, error) {
 		return nil, err
 	}
 
-	return &LoadAverages{
+	return &models.LoadAverages{
 		Load1:  load1,
 		Load5:  load5,
 		Load15: load15,
@@ -144,7 +115,7 @@ func getLoadAverages() (*LoadAverages, error) {
 }
 
 // getMemoryInfo reads memory information from /proc/meminfo.
-func getMemoryInfo() (*MemoryInfo, error) {
+func getMemoryInfo() (*models.MemoryInfo, error) {
 	file, err := os.Open("/proc/meminfo")
 	if err != nil {
 		return nil, err
@@ -168,7 +139,7 @@ func getMemoryInfo() (*MemoryInfo, error) {
 
 	used := memStats.Total - available
 
-	return &MemoryInfo{
+	return &models.MemoryInfo{
 		Total:     memStats.Total,
 		Used:      used,
 		Available: available,
@@ -228,7 +199,7 @@ func parseMemValue(key string, value uint64, stats *memStatValues) {
 }
 
 // getStorageInfo gets disk usage information for the specified directory.
-func getStorageInfo(path string) (*StorageInfo, error) {
+func getStorageInfo(path string) (*models.StorageInfo, error) {
 	var stat syscall.Statfs_t
 	err := syscall.Statfs(path, &stat)
 	if err != nil {
@@ -242,7 +213,7 @@ func getStorageInfo(path string) (*StorageInfo, error) {
 	available := stat.Bavail * blockSize
 	used := total - available
 
-	return &StorageInfo{
+	return &models.StorageInfo{
 		Total:     total,
 		Used:      used,
 		Available: available,

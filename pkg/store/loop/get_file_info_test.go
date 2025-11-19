@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
@@ -169,7 +170,7 @@ func (s *GetFileInfoTestSuite) TestGetFileInfoReturnType() {
 	s.Nil(fileInfo)
 
 	// Verify that if FileInfo were returned, it would have the right structure
-	expectedFileInfo := &store.FileInfo{
+	expectedFileInfo := &models.FileInfo{
 		Hash:      s.testHash,
 		Size:      1024,
 		CreatedAt: time.Now(),

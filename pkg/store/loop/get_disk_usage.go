@@ -6,11 +6,12 @@ import (
 	"syscall"
 
 	"loopfs/pkg/log"
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
 // GetDiskUsage returns disk space information for a specific file's loop filesystem.
-func (s *Store) GetDiskUsage(hash string) (*store.DiskUsage, error) {
+func (s *Store) GetDiskUsage(hash string) (*models.DiskUsage, error) {
 	hash = strings.ToLower(hash)
 
 	// Validate hash
@@ -34,7 +35,7 @@ func (s *Store) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 		return nil, err
 	}
 
-	var diskUsage *store.DiskUsage
+	var diskUsage *models.DiskUsage
 
 	// Use withMountedLoopUnlocked since we already hold the resize lock
 	err := s.withMountedLoopUnlocked(hash, func() error {
@@ -63,7 +64,7 @@ func (s *Store) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 		spaceFree := stat.Bfree * bsize
 		spaceUsed := totalSpace - spaceFree
 
-		diskUsage = &store.DiskUsage{
+		diskUsage = &models.DiskUsage{
 			SpaceUsed:      int64(spaceUsed),      //nolint:gosec // Safe in practice for disk sizes
 			SpaceAvailable: int64(spaceAvailable), //nolint:gosec // Safe in practice for disk sizes
 			TotalSpace:     int64(totalSpace),     //nolint:gosec // Safe in practice for disk sizes
@@ -72,9 +73,9 @@ func (s *Store) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 		log.Debug().
 			Str("hash", hash).
 			Str("mount_point", mountPoint).
-			Int64("used", int64(spaceUsed)). //nolint:gosec // Safe for logging
+			Int64("used", int64(spaceUsed)).           //nolint:gosec // Safe for logging
 			Int64("available", int64(spaceAvailable)). //nolint:gosec // Safe for logging
-			Int64("total", int64(totalSpace)). //nolint:gosec // Safe for logging
+			Int64("total", int64(totalSpace)).         //nolint:gosec // Safe for logging
 			Msg("Loop filesystem stats")
 
 		return nil

@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
@@ -304,13 +305,13 @@ func (s *UploadTestSuite) TestUploadErrorHandling() {
 		name     string
 		reader   io.Reader
 		filename string
-		expecter func(*testing.T, *store.UploadResult, error)
+		expecter func(*testing.T, *models.UploadResponse, error)
 	}{
 		{
 			name:     "error_reader",
 			reader:   uploadErrorReader{},
 			filename: "error.txt",
-			expecter: func(t *testing.T, result *store.UploadResult, err error) {
+			expecter: func(t *testing.T, result *models.UploadResponse, err error) {
 				if err == nil {
 					t.Error("Expected error from error reader")
 				}
@@ -323,7 +324,7 @@ func (s *UploadTestSuite) TestUploadErrorHandling() {
 			name:     "valid_content",
 			reader:   strings.NewReader("valid content"),
 			filename: "valid.txt",
-			expecter: func(t *testing.T, result *store.UploadResult, err error) {
+			expecter: func(t *testing.T, result *models.UploadResponse, err error) {
 				// May succeed or fail depending on test environment
 				if err != nil {
 					t.Logf("Upload failed as expected: %v", err)

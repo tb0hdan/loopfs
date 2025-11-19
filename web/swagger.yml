@@ -6,9 +6,16 @@ info:
 servers:
   - url: /
     description: Current server
+tags:
+  - name: casd
+    description: Core CAS storage server operations
+  - name: casd-balancer
+    description: Load balancer for CAS storage operations
 paths:
   /node/info:
     get:
+      tags:
+        - casd
       summary: Get node system information
       description: Returns system information including uptime, load averages, memory usage, and storage information for the storage directory
       responses:
@@ -87,6 +94,9 @@ paths:
                     example: "Failed to collect node information"
   /file/upload:
     post:
+      tags:
+        - casd
+        - casd-balancer
       summary: Upload a file to CAS storage
       description: Uploads a file and stores it using its SHA256 hash. Returns conflict if file already exists.
       requestBody:
@@ -148,6 +158,9 @@ paths:
                     type: string
   /file/{hash}/download:
     get:
+      tags:
+        - casd
+        - casd-balancer
       summary: Download a file from CAS storage
       description: Downloads a file by its SHA256 hash
       parameters:
@@ -189,6 +202,9 @@ paths:
                     example: "file not found"
   /file/{hash}/info:
     get:
+      tags:
+        - casd
+        - casd-balancer
       summary: Get file metadata
       description: Returns metadata about a stored file including size, creation time, and disk usage of its loop filesystem
       parameters:
@@ -261,6 +277,9 @@ paths:
                     example: "failed to get file info"
   /file/{hash}/delete:
     delete:
+      tags:
+        - casd
+        - casd-balancer
       summary: Delete a file from CAS storage
       description: Deletes a file from storage by its SHA256 hash
       parameters:

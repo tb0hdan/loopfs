@@ -2,45 +2,20 @@ package store
 
 import (
 	"io"
-	"time"
+	"loopfs/pkg/models"
 )
-
-// FileInfo represents metadata about a stored file.
-type FileInfo struct {
-	Hash      string    `json:"hash"`
-	Size      int64     `json:"size"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-// DiskUsage represents disk space information.
-type DiskUsage struct {
-	SpaceUsed      int64 `json:"space_used"`      // Bytes used
-	SpaceAvailable int64 `json:"space_available"` // Bytes available
-	TotalSpace     int64 `json:"total_space"`     // Total bytes
-}
-
-// UploadResult represents the result of an upload operation.
-type UploadResult struct {
-	Hash string `json:"hash"`
-}
 
 // Store defines the interface for content-addressable storage operations.
 type Store interface {
 	// Upload stores a file from the given reader and returns its hash.
 	// If the file already exists, it returns an error with the existing hash.
-	Upload(reader io.Reader, filename string) (*UploadResult, error)
+	Upload(reader io.Reader, filename string) (*models.UploadResponse, error)
 
 	// UploadWithHash stores a file using a pre-calculated hash and temp file path.
 	// This method is more efficient as it avoids redundant hashing and temp file creation.
 	// The tempFilePath should point to a file containing the content to be stored.
 	// If the file already exists, it returns an error with the existing hash.
-	UploadWithHash(tempFilePath, hash, filename string) (*UploadResult, error)
-
-	// Download retrieves a file by its hash and returns the file path.
-	// Returns an error if the file doesn't exist or hash is invalid.
-	//
-	// Deprecated: Use DownloadStream for better performance with large files.
-	Download(hash string) (string, error)
+	UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error)
 
 	// DownloadStream retrieves a file by its hash and returns a streaming reader.
 	// The caller must call Close() on the returned reader to cleanup resources.
@@ -49,7 +24,7 @@ type Store interface {
 
 	// GetFileInfo retrieves metadata about a stored file.
 	// Returns an error if the file doesn't exist or hash is invalid.
-	GetFileInfo(hash string) (*FileInfo, error)
+	GetFileInfo(hash string) (*models.FileInfo, error)
 
 	// Exists checks if a file with the given hash exists in storage.
 	Exists(hash string) (bool, error)
@@ -63,7 +38,7 @@ type Store interface {
 
 	// GetDiskUsage returns disk space information for a specific file's loop filesystem.
 	// Returns an error if the file doesn't exist or hash is invalid.
-	GetDiskUsage(hash string) (*DiskUsage, error)
+	GetDiskUsage(hash string) (*models.DiskUsage, error)
 }
 
 // FileExistsError is returned when trying to upload a file that already exists.

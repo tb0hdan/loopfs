@@ -8,11 +8,12 @@ import (
 	"path/filepath"
 
 	"loopfs/pkg/log"
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
 // Upload stores a file from the given reader and returns its hash.
-func (s *Store) Upload(reader io.Reader, filename string) (*store.UploadResult, error) {
+func (s *Store) Upload(reader io.Reader, filename string) (*models.UploadResponse, error) {
 	log.Debug().Str("filename", filename).Msg("Processing file upload")
 
 	hash, tempFile, err := s.processAndHashFile(reader)
@@ -34,7 +35,7 @@ func (s *Store) Upload(reader io.Reader, filename string) (*store.UploadResult, 
 	}
 
 	log.Debug().Str("hash", hash).Str("filename", filename).Msg("File uploaded successfully")
-	return &store.UploadResult{Hash: hash}, nil
+	return &models.UploadResponse{Hash: hash}, nil
 }
 
 // processAndHashFile reads from reader, hashes content and saves to temp file.
@@ -237,7 +238,7 @@ func (s *Store) saveFileFromPathWithinMountedLoop(hash string, sourcePath string
 
 // UploadWithHash stores a file using a pre-calculated hash and temp file path.
 // This method is more efficient as it avoids redundant hashing and temp file creation.
-func (s *Store) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+func (s *Store) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
 	log.Debug().Str("filename", filename).Str("hash", hash).Msg("Processing file upload with pre-calculated hash")
 
 	// Validate the provided hash
@@ -259,7 +260,7 @@ func (s *Store) UploadWithHash(tempFilePath, hash, filename string) (*store.Uplo
 	}
 
 	log.Debug().Str("hash", hash).Str("filename", filename).Msg("File uploaded successfully")
-	return &store.UploadResult{Hash: hash}, nil
+	return &models.UploadResponse{Hash: hash}, nil
 }
 
 // cleanupTempFile closes and removes the temporary file.

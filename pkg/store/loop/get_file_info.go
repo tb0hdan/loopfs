@@ -5,11 +5,12 @@ import (
 	"strings"
 
 	"loopfs/pkg/log"
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
 // GetFileInfo retrieves metadata about a stored file.
-func (s *Store) GetFileInfo(hash string) (*store.FileInfo, error) {
+func (s *Store) GetFileInfo(hash string) (*models.FileInfo, error) {
 	hash = strings.ToLower(hash)
 	if !s.ValidateHash(hash) {
 		log.Error().Str("hash", hash).Msg("Invalid hash format")
@@ -32,7 +33,7 @@ func (s *Store) GetFileInfo(hash string) (*store.FileInfo, error) {
 		return nil, err
 	}
 
-	var fileInfo *store.FileInfo
+	var fileInfo *models.FileInfo
 	// Use withMountedLoopUnlocked since we already hold the resize lock
 	err := s.withMountedLoopUnlocked(hash, func() error {
 		filePath, err := s.findFileInLoop(hash)
@@ -47,7 +48,7 @@ func (s *Store) GetFileInfo(hash string) (*store.FileInfo, error) {
 			return err
 		}
 
-		fileInfo = &store.FileInfo{
+		fileInfo = &models.FileInfo{
 			Hash:      hash,
 			Size:      osFileInfo.Size(),
 			CreatedAt: osFileInfo.ModTime(),

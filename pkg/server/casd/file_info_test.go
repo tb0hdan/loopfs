@@ -1,4 +1,4 @@
-package server
+package casd
 
 import (
 	"encoding/json"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
@@ -39,7 +40,7 @@ func (s *FileInfoTestSuite) TearDownSuite() {
 // SetupTest runs before each test
 func (s *FileInfoTestSuite) SetupTest() {
 	s.mockStore = NewMockStore()
-	s.server = NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", s.mockStore)
+	s.server = NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", s.mockStore, false, "")
 	s.server.setupRoutes()
 }
 
@@ -48,7 +49,7 @@ func (s *FileInfoTestSuite) TestGetFileInfoSuccess() {
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 	content := "test file content"
 	s.mockStore.files[hash] = []byte(content)
-	s.mockStore.fileInfo[hash] = &store.FileInfo{
+	s.mockStore.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      int64(len(content)),
 		CreatedAt: time.Now(),
@@ -140,13 +141,13 @@ func (s *FileInfoTestSuite) TestGetFileInfoWithoutDiskUsage() {
 		MockStore: NewMockStore(),
 		errorType: "diskusage",
 	}
-	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 	content := "test content"
 	mockStore.files[hash] = []byte(content)
-	mockStore.fileInfo[hash] = &store.FileInfo{
+	mockStore.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      int64(len(content)),
 		CreatedAt: time.Now(),
@@ -219,7 +220,7 @@ func (s *FileInfoTestSuite) TestGetFileInfoUppercaseHash() {
 	uppercaseHash := "ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABCDEF1234567890"
 	content := "test content"
 	s.mockStore.files[lowercaseHash] = []byte(content)
-	s.mockStore.fileInfo[lowercaseHash] = &store.FileInfo{
+	s.mockStore.fileInfo[lowercaseHash] = &models.FileInfo{
 		Hash:      lowercaseHash,
 		Size:      int64(len(content)),
 		CreatedAt: time.Now(),
@@ -246,7 +247,7 @@ func (s *FileInfoTestSuite) TestGetFileInfoLargeFile() {
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 	largeContent := make([]byte, 1024*1024) // 1MB
 	s.mockStore.files[hash] = largeContent
-	s.mockStore.fileInfo[hash] = &store.FileInfo{
+	s.mockStore.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      int64(len(largeContent)),
 		CreatedAt: time.Now(),
@@ -273,7 +274,7 @@ func (s *FileInfoTestSuite) TestGetFileInfoLargeFile() {
 func (s *FileInfoTestSuite) TestGetFileInfoEmptyFile() {
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 	s.mockStore.files[hash] = []byte("")
-	s.mockStore.fileInfo[hash] = &store.FileInfo{
+	s.mockStore.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      0,
 		CreatedAt: time.Now(),
@@ -302,11 +303,11 @@ type MockStoreFileInfoError struct {
 	errorType string
 }
 
-func (m *MockStoreFileInfoError) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+func (m *MockStoreFileInfoError) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
 	return m.MockStore.UploadWithHash(tempFilePath, hash, filename)
 }
 
-func (m *MockStoreFileInfoError) GetFileInfo(hash string) (*store.FileInfo, error) {
+func (m *MockStoreFileInfoError) GetFileInfo(hash string) (*models.FileInfo, error) {
 	switch m.errorType {
 	case "not_found":
 		return nil, store.FileNotFoundError{Hash: hash}
@@ -319,7 +320,7 @@ func (m *MockStoreFileInfoError) GetFileInfo(hash string) (*store.FileInfo, erro
 	}
 }
 
-func (m *MockStoreFileInfoError) GetDiskUsage(hash string) (*store.DiskUsage, error) {
+func (m *MockStoreFileInfoError) GetDiskUsage(hash string) (*models.DiskUsage, error) {
 	if m.errorType == "diskusage" {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
@@ -332,7 +333,7 @@ func (s *FileInfoTestSuite) TestGetFileInfoStoreError() {
 		MockStore: NewMockStore(),
 		errorType: "generic",
 	}
-	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -392,7 +393,7 @@ func (s *FileInfoTestSuite) TestGetFileInfoConcurrentRequests() {
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 	content := "concurrent test content"
 	s.mockStore.files[hash] = []byte(content)
-	s.mockStore.fileInfo[hash] = &store.FileInfo{
+	s.mockStore.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      int64(len(content)),
 		CreatedAt: time.Now(),
@@ -428,7 +429,7 @@ func (s *FileInfoTestSuite) TestGetFileInfoJSONFormat() {
 	content := "json format test"
 	createdAt := time.Now()
 	s.mockStore.files[hash] = []byte(content)
-	s.mockStore.fileInfo[hash] = &store.FileInfo{
+	s.mockStore.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      int64(len(content)),
 		CreatedAt: createdAt,
@@ -540,7 +541,7 @@ func (s *FileInfoTestSuite) TestGetFileInfoMixedCaseHash() {
 	mixedCaseHash := "aBcDeF1234567890AbCdEf1234567890AbCdEf1234567890AbCdEf1234567890"
 	content := "mixed case test"
 	s.mockStore.files[lowercaseHash] = []byte(content)
-	s.mockStore.fileInfo[lowercaseHash] = &store.FileInfo{
+	s.mockStore.fileInfo[lowercaseHash] = &models.FileInfo{
 		Hash:      lowercaseHash,
 		Size:      int64(len(content)),
 		CreatedAt: time.Now(),
@@ -567,7 +568,7 @@ func (s *FileInfoTestSuite) TestGetFileInfoDiskUsageFields() {
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 	content := "disk usage test"
 	s.mockStore.files[hash] = []byte(content)
-	s.mockStore.fileInfo[hash] = &store.FileInfo{
+	s.mockStore.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      int64(len(content)),
 		CreatedAt: time.Now(),

@@ -258,20 +258,6 @@ func (s *LoopStoreTestSuite) TestDeleteWhenFileDoesNotExist() {
 	s.IsType(store.FileNotFoundError{}, err)
 }
 
-// TestDownloadWithInvalidHash tests Download with invalid hash
-func (s *LoopStoreTestSuite) TestDownloadWithInvalidHash() {
-	_, err := s.store.Download("invalid")
-	s.Error(err)
-	s.IsType(store.InvalidHashError{}, err)
-}
-
-// TestDownloadWhenFileDoesNotExist tests Download when file doesn't exist
-func (s *LoopStoreTestSuite) TestDownloadWhenFileDoesNotExist() {
-	_, err := s.store.Download(s.testHash)
-	s.Error(err)
-	s.IsType(store.FileNotFoundError{}, err)
-}
-
 // TestUploadBasic tests basic upload functionality
 func (s *LoopStoreTestSuite) TestUploadBasic() {
 	// Skip this test if we can't run mount commands (requires root)
@@ -466,15 +452,6 @@ func (s *LoopStoreTestSuite) TestWithMountedLoop() {
 	s.False(callbackCalled) // Callback should not be called if mount fails
 }
 
-// TestDownloadEdgeCases tests additional download scenarios
-func (s *LoopStoreTestSuite) TestDownloadEdgeCases() {
-	// Test Download with non-existent loop file
-	validHash := "abcd123456789012345678901234567890123456789012345678901234567890"
-	_, err := s.store.Download(validHash)
-	s.Error(err) // Should fail because loop file doesn't exist
-	s.IsType(store.FileNotFoundError{}, err)
-}
-
 // TestExistsEdgeCases tests additional exists scenarios
 func (s *LoopStoreTestSuite) TestExistsEdgeCases() {
 	validHash := "abcd123456789012345678901234567890123456789012345678901234567890"
@@ -618,33 +595,6 @@ func (s *LoopStoreTestSuite) TestHashLengthValidation() {
 	}
 }
 
-// TestDownloadWithMountedLoop tests the Download function with actual mounted loop
-func (s *LoopStoreTestSuite) TestDownloadWithMountedLoop() {
-	validHash := s.testHash
-
-	// Test Download with invalid hash
-	_, err := s.store.Download("invalid")
-	s.Error(err)
-	s.IsType(store.InvalidHashError{}, err)
-
-	// Test Download with valid hash but non-existent loop file
-	_, err = s.store.Download(validHash)
-	s.Error(err)
-	s.IsType(store.FileNotFoundError{}, err)
-}
-
-// TestCopyFileToTempError tests copyFileToTemp error conditions
-func (s *LoopStoreTestSuite) TestCopyFileToTempError() {
-	// Test with non-existent source file
-	_, err := s.store.copyFileToTemp("/nonexistent/file", s.testHash)
-	s.Error(err)
-	s.Contains(err.Error(), "no such file or directory")
-
-	// Test with empty file path
-	_, err = s.store.copyFileToTemp("", s.testHash)
-	s.Error(err)
-}
-
 // TestExistsWithMountedLoop tests the Exists function with mounting scenarios
 func (s *LoopStoreTestSuite) TestExistsWithMountedLoop() {
 	validHash := s.testHash
@@ -679,7 +629,7 @@ func (s *LoopStoreTestSuite) TestGetDiskUsageWithMountedLoop() {
 func (s *LoopStoreTestSuite) TestDeleteWithMountedLoop() {
 	validHash := s.testHash
 
-	// Test with valid hash but no loop file
+	// Test with a valid hash but no loop file
 	err := s.store.Delete(validHash)
 	s.Error(err)
 	s.IsType(store.FileNotFoundError{}, err)

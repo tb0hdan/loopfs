@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"loopfs/pkg/log"
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
@@ -100,18 +101,13 @@ func (m *Manager) VerifyBlock(sourceFile string, hash string) error {
 }
 
 // Upload delegates to the underlying store's Upload method.
-func (m *Manager) Upload(reader io.Reader, filename string) (*store.UploadResult, error) {
+func (m *Manager) Upload(reader io.Reader, filename string) (*models.UploadResponse, error) {
 	return m.store.Upload(reader, filename)
 }
 
 // UploadWithHash delegates to the underlying store's UploadWithHash method.
-func (m *Manager) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+func (m *Manager) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
 	return m.store.UploadWithHash(tempFilePath, hash, filename)
-}
-
-// Download delegates to the underlying store's Download method.
-func (m *Manager) Download(hash string) (string, error) {
-	return m.store.Download(hash)
 }
 
 // DownloadStream delegates to the underlying store's DownloadStream method.
@@ -120,7 +116,7 @@ func (m *Manager) DownloadStream(hash string) (io.ReadCloser, error) {
 }
 
 // GetFileInfo delegates to the underlying store's GetFileInfo method.
-func (m *Manager) GetFileInfo(hash string) (*store.FileInfo, error) {
+func (m *Manager) GetFileInfo(hash string) (*models.FileInfo, error) {
 	return m.store.GetFileInfo(hash)
 }
 
@@ -140,7 +136,7 @@ func (m *Manager) Delete(hash string) error {
 }
 
 // GetDiskUsage delegates to the underlying store's GetDiskUsage method.
-func (m *Manager) GetDiskUsage(hash string) (*store.DiskUsage, error) {
+func (m *Manager) GetDiskUsage(hash string) (*models.DiskUsage, error) {
 	return m.store.GetDiskUsage(hash)
 }
 

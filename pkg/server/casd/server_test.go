@@ -1,4 +1,4 @@
-package server
+package casd
 
 import (
 	"bytes"
@@ -14,14 +14,15 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
 // MockStore implements the store.Store interface for testing
 type MockStore struct {
 	files         map[string][]byte
-	fileInfo      map[string]*store.FileInfo
-	uploadResults map[string]*store.UploadResult
+	fileInfo      map[string]*models.FileInfo
+	uploadResults map[string]*models.UploadResponse
 	shouldError   bool
 	errorType     string
 }
@@ -30,14 +31,14 @@ type MockStore struct {
 func NewMockStore() *MockStore {
 	return &MockStore{
 		files:         make(map[string][]byte),
-		fileInfo:      make(map[string]*store.FileInfo),
-		uploadResults: make(map[string]*store.UploadResult),
+		fileInfo:      make(map[string]*models.FileInfo),
+		uploadResults: make(map[string]*models.UploadResponse),
 		shouldError:   false,
 	}
 }
 
 // Upload implementation for mock store
-func (m *MockStore) Upload(reader io.Reader, filename string) (*store.UploadResult, error) {
+func (m *MockStore) Upload(reader io.Reader, filename string) (*models.UploadResponse, error) {
 	if m.shouldError && m.errorType == "upload" {
 		return nil, store.FileExistsError{Hash: "existing"}
 	}
@@ -46,19 +47,19 @@ func (m *MockStore) Upload(reader io.Reader, filename string) (*store.UploadResu
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 
 	m.files[hash] = data
-	m.fileInfo[hash] = &store.FileInfo{
+	m.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      int64(len(data)),
 		CreatedAt: time.Now(),
 	}
 
-	result := &store.UploadResult{Hash: hash}
+	result := &models.UploadResponse{Hash: hash}
 	m.uploadResults[hash] = result
 	return result, nil
 }
 
 // UploadWithHash implementation for mock store
-func (m *MockStore) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+func (m *MockStore) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
 	if m.shouldError && m.errorType == "upload" {
 		return nil, store.FileExistsError{Hash: "existing"}
 	}
@@ -70,47 +71,15 @@ func (m *MockStore) UploadWithHash(tempFilePath, hash, filename string) (*store.
 	}
 
 	m.files[hash] = data
-	m.fileInfo[hash] = &store.FileInfo{
+	m.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      int64(len(data)),
 		CreatedAt: time.Now(),
 	}
 
-	result := &store.UploadResult{Hash: hash}
+	result := &models.UploadResponse{Hash: hash}
 	m.uploadResults[hash] = result
 	return result, nil
-}
-
-// Download implementation for mock store
-func (m *MockStore) Download(hash string) (string, error) {
-	if m.shouldError && m.errorType == "download" {
-		return "", store.FileNotFoundError{Hash: hash}
-	}
-
-	hash = strings.ToLower(hash)
-	if !m.ValidateHash(hash) {
-		return "", store.InvalidHashError{Hash: hash}
-	}
-
-	data, exists := m.files[hash]
-	if !exists {
-		return "", store.FileNotFoundError{Hash: hash}
-	}
-
-	// Create a temporary file with actual content
-	tmpFile, err := os.CreateTemp("", "mock-download-"+hash+"-*")
-	if err != nil {
-		return "", err
-	}
-
-	if _, err := tmpFile.Write(data); err != nil {
-		tmpFile.Close()
-		os.Remove(tmpFile.Name())
-		return "", err
-	}
-
-	tmpFile.Close()
-	return tmpFile.Name(), nil
 }
 
 // DownloadStream implementation for mock store
@@ -134,7 +103,7 @@ func (m *MockStore) DownloadStream(hash string) (io.ReadCloser, error) {
 }
 
 // GetFileInfo implementation for mock store
-func (m *MockStore) GetFileInfo(hash string) (*store.FileInfo, error) {
+func (m *MockStore) GetFileInfo(hash string) (*models.FileInfo, error) {
 	if m.shouldError && m.errorType == "fileinfo" {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
@@ -200,7 +169,7 @@ func (m *MockStore) Delete(hash string) error {
 }
 
 // GetDiskUsage implementation for mock store
-func (m *MockStore) GetDiskUsage(hash string) (*store.DiskUsage, error) {
+func (m *MockStore) GetDiskUsage(hash string) (*models.DiskUsage, error) {
 	if m.shouldError && m.errorType == "diskusage" {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
@@ -214,7 +183,7 @@ func (m *MockStore) GetDiskUsage(hash string) (*store.DiskUsage, error) {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
 
-	return &store.DiskUsage{
+	return &models.DiskUsage{
 		SpaceUsed:      1024,
 		SpaceAvailable: 10240,
 		TotalSpace:     11264,
@@ -256,13 +225,13 @@ func (s *ServerTestSuite) TearDownSuite() {
 // SetupTest runs before each test
 func (s *ServerTestSuite) SetupTest() {
 	s.mockStore = NewMockStore()
-	s.server = NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", s.mockStore)
+	s.server = NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", s.mockStore, false, "")
 	s.server.setupRoutes()
 }
 
 // TestNewCASServer tests the constructor
 func (s *ServerTestSuite) TestNewCASServer() {
-	server := NewCASServer("/storage", "/web", "v1.0.0", s.mockStore)
+	server := NewCASServer("/storage", "/web", "v1.0.0", s.mockStore, false, "")
 	s.NotNil(server)
 	s.Equal("/storage", server.storageDir)
 	s.Equal("/web", server.webDir)
@@ -363,7 +332,7 @@ func (s *ServerTestSuite) TestGetFileInfo() {
 	// First add a file to the mock store
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 	s.mockStore.files[hash] = []byte("test content")
-	s.mockStore.fileInfo[hash] = &store.FileInfo{
+	s.mockStore.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      12,
 		CreatedAt: time.Now(),

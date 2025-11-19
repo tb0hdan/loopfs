@@ -1,4 +1,4 @@
-package server
+package casd
 
 import (
 	"os"
@@ -32,7 +32,7 @@ func (s *ServerMainTestSuite) TearDownSuite() {
 // TestNewCASServer tests the constructor function
 func (s *ServerMainTestSuite) TestNewCASServer() {
 	mockStore := NewMockStore()
-	server := NewCASServer("/storage", "/web", "v1.0.0", mockStore)
+	server := NewCASServer("/storage", "/web", "v1.0.0", mockStore, false, "")
 
 	s.NotNil(server)
 	s.Equal("/storage", server.storageDir)
@@ -49,7 +49,7 @@ func (s *ServerMainTestSuite) TestNewCASServerWithStoreManager() {
 	// For now, we test with a mock store manager
 	mockStore := NewMockStore()
 
-	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 
 	s.NotNil(server)
 	s.Equal(s.tempDir, server.storageDir)
@@ -62,7 +62,7 @@ func (s *ServerMainTestSuite) TestNewCASServerWithStoreManager() {
 // TestSetupRoutes tests that routes are properly configured
 func (s *ServerMainTestSuite) TestSetupRoutes() {
 	mockStore := NewMockStore()
-	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	// Test Echo configuration
@@ -96,7 +96,7 @@ func (s *ServerMainTestSuite) TestSetupRoutes() {
 // TestShutdownSuccess tests successful server shutdown
 func (s *ServerMainTestSuite) TestShutdownSuccess() {
 	mockStore := NewMockStore()
-	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 
 	err := server.Shutdown()
 	s.NoError(err)
@@ -105,7 +105,7 @@ func (s *ServerMainTestSuite) TestShutdownSuccess() {
 // TestShutdownTimeout tests shutdown with context timeout
 func (s *ServerMainTestSuite) TestShutdownTimeout() {
 	mockStore := NewMockStore()
-	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 
 	// This should complete quickly since the server isn't actually running
 	start := time.Now()
@@ -126,7 +126,7 @@ func (s *ServerMainTestSuite) TestServerConstants() {
 func (s *ServerMainTestSuite) TestStartAndShutdownCycle() {
 	// This test is complex due to signal handling, so we'll just test shutdown directly
 	mockStore := NewMockStore()
-	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 
 	// Test shutdown without starting (should work gracefully)
 	err := server.Shutdown()
@@ -142,12 +142,12 @@ type ServerMockStoreManager struct {
 func (s *ServerMainTestSuite) TestNewCASServerStoreManagerDetection() {
 	// Test with regular store
 	mockStore := NewMockStore()
-	server1 := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+	server1 := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 	s.Nil(server1.storeMgr)
 
 	// Test with mock store manager (doesn't implement storemanager.Manager interface)
 	mockStoreMgr := &ServerMockStoreManager{MockStore: NewMockStore()}
-	server2 := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStoreMgr)
+	server2 := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStoreMgr, false, "")
 	s.Nil(server2.storeMgr) // Should be nil as it's not a real store manager
 }
 
@@ -158,7 +158,7 @@ func (s *ServerMainTestSuite) TestServerStructureInitialization() {
 	webDir := "/test/web"
 	version := "test-v2.0.0"
 
-	server := NewCASServer(storageDir, webDir, version, mockStore)
+	server := NewCASServer(storageDir, webDir, version, mockStore, false, "")
 
 	s.Equal(storageDir, server.storageDir)
 	s.Equal(webDir, server.webDir)
@@ -171,7 +171,7 @@ func (s *ServerMainTestSuite) TestServerStructureInitialization() {
 // TestServerWithEmptyPaths tests server creation with empty paths
 func (s *ServerMainTestSuite) TestServerWithEmptyPaths() {
 	mockStore := NewMockStore()
-	server := NewCASServer("", "", "", mockStore)
+	server := NewCASServer("", "", "", mockStore, false, "")
 
 	s.Equal("", server.storageDir)
 	s.Equal("", server.webDir)
@@ -182,7 +182,7 @@ func (s *ServerMainTestSuite) TestServerWithEmptyPaths() {
 
 // TestServerWithNilStore tests server creation with nil store
 func (s *ServerMainTestSuite) TestServerWithNilStore() {
-	server := NewCASServer(s.tempDir, "/web", "v1.0.0", nil)
+	server := NewCASServer(s.tempDir, "/web", "v1.0.0", nil, false, "")
 
 	s.Equal(s.tempDir, server.storageDir)
 	s.Equal("/web", server.webDir)
@@ -195,7 +195,7 @@ func (s *ServerMainTestSuite) TestServerWithNilStore() {
 // TestSetupRoutesIdempotent tests that calling setupRoutes multiple times is safe
 func (s *ServerMainTestSuite) TestSetupRoutesIdempotent() {
 	mockStore := NewMockStore()
-	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 
 	// Call setupRoutes multiple times
 	server.setupRoutes()
@@ -230,7 +230,7 @@ func (s *ServerMainTestSuite) TestSetupRoutesIdempotent() {
 // TestServerEchoConfiguration tests Echo framework configuration
 func (s *ServerMainTestSuite) TestServerEchoConfiguration() {
 	mockStore := NewMockStore()
-	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	// Test Echo instance configuration
@@ -242,7 +242,7 @@ func (s *ServerMainTestSuite) TestServerEchoConfiguration() {
 // TestServerMiddlewareSetup tests that middleware is properly configured
 func (s *ServerMainTestSuite) TestServerMiddlewareSetup() {
 	mockStore := NewMockStore()
-	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	// Test that middleware was added by checking routes exist
@@ -254,7 +254,7 @@ func (s *ServerMainTestSuite) TestServerMiddlewareSetup() {
 // TestShutdownWithContextCancellation tests shutdown with context cancellation
 func (s *ServerMainTestSuite) TestShutdownWithContextCancellation() {
 	mockStore := NewMockStore()
-	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 
 	// Test that shutdown works even when called on a non-running server
 	err := server.Shutdown()
@@ -273,7 +273,7 @@ func (s *ServerMainTestSuite) TestServerConcurrentAccess() {
 		go func() {
 			defer wg.Done()
 			mockStore := NewMockStore()
-			server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore)
+			server := NewCASServer(s.tempDir, "/web", "v1.0.0", mockStore, false, "")
 			server.setupRoutes()
 
 			// Verify server is in good state
@@ -294,7 +294,7 @@ func (s *ServerMainTestSuite) TestServerFieldAccess() {
 	webDir := "/custom/web"
 	version := "field-test-v1.0.0"
 
-	server := NewCASServer(storageDir, webDir, version, mockStore)
+	server := NewCASServer(storageDir, webDir, version, mockStore, false, "")
 
 	// Test field access
 	s.Equal(storageDir, server.storageDir)

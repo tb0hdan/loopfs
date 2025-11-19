@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
@@ -167,7 +168,7 @@ func (s *GetDiskUsageTestSuite) TestGetDiskUsageReturnType() {
 	s.Nil(diskUsage)
 
 	// Verify that if DiskUsage were returned, it would have the right structure
-	expectedDiskUsage := &store.DiskUsage{
+	expectedDiskUsage := &models.DiskUsage{
 		SpaceUsed:      1024,
 		SpaceAvailable: 2048,
 		TotalSpace:     3072,

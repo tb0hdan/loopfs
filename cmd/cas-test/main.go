@@ -27,8 +27,8 @@ const (
 	defaultFullPassParallel = 10
 	defaultHTTPTimeout      = 2 * time.Minute
 
-	separatorLineLength     = 80
-	microsecondsToMillis    = 1000.0
+	separatorLineLength  = 80
+	microsecondsToMillis = 1000.0
 )
 
 type config struct {
@@ -82,15 +82,15 @@ type stepMetrics struct {
 
 // Metrics collector for tracking all operations.
 type metricsCollector struct {
-	mu           sync.Mutex
-	steps        []stepMetrics
-	currentStep  *stepMetrics
-	showSummary  bool
-	totalUploads int
-	totalDeletes int
-	totalInfos   int
+	mu             sync.Mutex
+	steps          []stepMetrics
+	currentStep    *stepMetrics
+	showSummary    bool
+	totalUploads   int
+	totalDeletes   int
+	totalInfos     int
 	totalDownloads int
-	totalBytes   int64
+	totalBytes     int64
 }
 
 type uploadResponse struct {

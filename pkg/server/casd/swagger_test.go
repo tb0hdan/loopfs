@@ -1,4 +1,4 @@
-package server
+package casd
 
 import (
 	"net/http"
@@ -43,7 +43,7 @@ func (s *SwaggerTestSuite) TearDownSuite() {
 // SetupTest runs before each test
 func (s *SwaggerTestSuite) SetupTest() {
 	s.mockStore = NewMockStore()
-	s.server = NewCASServer(s.tempDir, s.webDir, "test-v1.0.0", s.mockStore)
+	s.server = NewCASServer(s.tempDir, s.webDir, "test-v1.0.0", s.mockStore, false, "")
 	s.server.setupRoutes()
 }
 
@@ -420,7 +420,7 @@ func (s *SwaggerTestSuite) TestServeSwaggerUIWithCustomWebDir() {
 	s.Require().NoError(err)
 
 	// Create server with custom web directory
-	customServer := NewCASServer(s.tempDir, customWebDir, "custom-v1.0.0", s.mockStore)
+	customServer := NewCASServer(s.tempDir, customWebDir, "custom-v1.0.0", s.mockStore, false, "")
 	customServer.setupRoutes()
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)

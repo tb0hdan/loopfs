@@ -1,4 +1,4 @@
-package server
+package casd
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
+	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
 
@@ -40,7 +41,7 @@ func (s *UploadTestSuite) TearDownSuite() {
 // SetupTest runs before each test
 func (s *UploadTestSuite) SetupTest() {
 	s.mockStore = NewMockStore()
-	s.server = NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", s.mockStore)
+	s.server = NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", s.mockStore, false, "")
 	s.server.setupRoutes()
 }
 
@@ -342,18 +343,18 @@ type MockStoreInvalidHash struct {
 	*MockStore
 }
 
-func (m *MockStoreInvalidHash) Upload(reader io.Reader, filename string) (*store.UploadResult, error) {
+func (m *MockStoreInvalidHash) Upload(reader io.Reader, filename string) (*models.UploadResponse, error) {
 	return nil, store.InvalidHashError{Hash: "invalid"}
 }
 
-func (m *MockStoreInvalidHash) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+func (m *MockStoreInvalidHash) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
 	return nil, store.InvalidHashError{Hash: "invalid"}
 }
 
 // TestUploadFileInvalidHashError tests upload when store returns invalid hash error
 func (s *UploadTestSuite) TestUploadFileInvalidHashError() {
 	mockStore := &MockStoreInvalidHash{MockStore: NewMockStore()}
-	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	content := "test content"
@@ -385,18 +386,18 @@ type MockStoreGenericError struct {
 	*MockStore
 }
 
-func (m *MockStoreGenericError) Upload(reader io.Reader, filename string) (*store.UploadResult, error) {
+func (m *MockStoreGenericError) Upload(reader io.Reader, filename string) (*models.UploadResponse, error) {
 	return nil, io.ErrUnexpectedEOF
 }
 
-func (m *MockStoreGenericError) UploadWithHash(tempFilePath, hash, filename string) (*store.UploadResult, error) {
+func (m *MockStoreGenericError) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
 	return nil, io.ErrUnexpectedEOF
 }
 
 // TestUploadFileGenericError tests upload when store returns generic error
 func (s *UploadTestSuite) TestUploadFileGenericError() {
 	mockStore := &MockStoreGenericError{MockStore: NewMockStore()}
-	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore)
+	server := NewCASServer(s.tempDir, s.tempDir, "test-v1.0.0", mockStore, false, "")
 	server.setupRoutes()
 
 	content := "test content"
