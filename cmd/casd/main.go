@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"loopfs/pkg/log"
+	"loopfs/pkg/manager"
 	"loopfs/pkg/server/casd"
 	"loopfs/pkg/store/loop"
-	"loopfs/pkg/storemanager"
 )
 
 const (
@@ -75,7 +75,7 @@ func main() {
 
 	loopStore := loop.New(*storageDir, *loopFileSize, timeoutConfig, *mountCacheTTL)
 	// Initialize Store Manager with the default buffer size (128MB)
-	storeMgr := storemanager.New(loopStore, storemanager.DefaultBufferSize)
+	storeMgr := manager.New(loopStore, manager.DefaultBufferSize)
 	cas := casd.NewCASServer(*storageDir, *webDir, strings.TrimSpace(Version), storeMgr, *debug, *debugAddr)
 
 	if err := cas.Start(*addr); err != nil {

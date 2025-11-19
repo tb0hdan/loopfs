@@ -93,33 +93,23 @@ func (b *Balancer) getNodeInfo(ctx context.Context, backend string) (*models.Nod
 	return &nodeInfo, nil
 }
 
+type backendSpaceInfo struct {
+	available uint64
+}
+
 // selectBackendForUpload chooses the backend with the most available storage space.
 func (b *Balancer) selectBackendForUpload(ctx context.Context, fileSize int64) (string, error) {
-	type backendInfo struct {
-		url       string
-		available uint64
-		err       error
-	}
-
-	results := make(chan backendInfo, len(b.backends))
-	var waitGroup sync.WaitGroup
-
-	// Query all backends in parallel
-	for _, backend := range b.backends {
-		waitGroup.Add(1)
-		go func(url string) {
-			defer waitGroup.Done()
-			info, err := b.getNodeInfo(ctx, url)
+	// Execute node info request across all backends
+	results := executeBackendRequests(ctx, b.backends, b.requestTimeout,
+		func(reqCtx context.Context, backend string) (backendSpaceInfo, int, error) {
+			info, err := b.getNodeInfo(reqCtx, backend)
 			if err != nil {
-				results <- backendInfo{url: url, err: err}
-				return
+				return backendSpaceInfo{}, 0, err
 			}
-			results <- backendInfo{url: url, available: info.Storage.Available}
-		}(backend)
-	}
-
-	waitGroup.Wait()
-	close(results)
+			return backendSpaceInfo{available: info.Storage.Available}, http.StatusOK, nil
+		},
+		false, // Don't cancel on success - we need all backends to find the best one
+	)
 
 	var (
 		bestBackend  string
@@ -128,24 +118,24 @@ func (b *Balancer) selectBackendForUpload(ctx context.Context, fileSize int64) (
 	)
 
 	for result := range results {
-		if result.err != nil {
-			log.Warn().Err(result.err).Str("backend", result.url).Msg("Failed to get node info")
-			lastError = result.err
+		if result.Error != nil {
+			log.Warn().Err(result.Error).Str("backend", result.Backend).Msg("Failed to get node info")
+			lastError = result.Error
 			continue
 		}
 
 		// Check if file will fit (ensure fileSize is not negative)
-		if fileSize < 0 || result.available < uint64(fileSize) {
-			log.Warn().Str("backend", result.url).
+		if fileSize < 0 || result.Data.available < uint64(fileSize) {
+			log.Warn().Str("backend", result.Backend).
 				Int64("file_size", fileSize).
-				Uint64("available", result.available).
+				Uint64("available", result.Data.available).
 				Msg("Backend does not have enough space")
 			continue
 		}
 
-		if result.available > maxAvailable {
-			maxAvailable = result.available
-			bestBackend = result.url
+		if result.Data.available > maxAvailable {
+			maxAvailable = result.Data.available
+			bestBackend = result.Backend
 		}
 	}
 
@@ -182,4 +172,83 @@ func (b *Balancer) setCachedNodeInfo(backend string, info *models.NodeInfo) {
 		info:    *info,
 		expires: time.Now().Add(b.cacheTTL),
 	}
+}
+
+// RequestResult is a generic result from a backend request.
+type RequestResult[T any] struct {
+	Backend   string
+	Data      T
+	Status    int
+	Error     error
+	CtxCancel context.CancelFunc // Optional cancel function for the request context
+}
+
+// BackendRequestFunc defines a function that makes a request to a single backend.
+type BackendRequestFunc[T any] func(ctx context.Context, backend string) (T, int, error)
+
+// executeBackendRequests executes requests across all backends in parallel using waitgroups.
+// It returns a channel that will be closed when all requests complete.
+// If cancelOnSuccess is true, other requests will be cancelled when the first successful response is received.
+//
+//nolint:govet // cancel is intentionally not called on all paths to avoid canceling streaming downloads
+func executeBackendRequests[T any](
+	ctx context.Context,
+	backends []string,
+	requestTimeout time.Duration,
+	requestFunc BackendRequestFunc[T],
+	cancelOnSuccess bool,
+) <-chan RequestResult[T] {
+	results := make(chan RequestResult[T], len(backends))
+	var waitGroup sync.WaitGroup
+	cancelCtx, cancel := context.WithCancel(ctx)
+
+	for _, backend := range backends {
+		waitGroup.Add(1)
+		go func(url string) {
+			defer waitGroup.Done()
+
+			reqCtx, reqCancel := context.WithTimeout(cancelCtx, requestTimeout)
+
+			data, status, err := requestFunc(reqCtx, url)
+			result := RequestResult[T]{
+				Backend:   url,
+				Data:      data,
+				Status:    status,
+				Error:     err,
+				CtxCancel: reqCancel,
+			}
+
+			// Only cancel immediately if there was an error or non-OK status
+			// For successful responses, pass the cancel function to the handler
+			if err != nil || status != http.StatusOK {
+				reqCancel()
+				result.CtxCancel = nil
+			}
+
+			select {
+			case results <- result:
+				// If we got a success and should cancel on success, do so
+				if cancelOnSuccess && err == nil && status == http.StatusOK {
+					cancel()
+				}
+			case <-cancelCtx.Done():
+				// If context was canceled, clean up
+				if result.CtxCancel != nil {
+					result.CtxCancel()
+				}
+			}
+		}(backend)
+	}
+
+	// Close channel when all goroutines complete
+	go func() {
+		waitGroup.Wait()
+		close(results)
+		// Note: We intentionally don't call cancel() here because handlers may still
+		// be using the response (e.g., streaming download response body). The context
+		// will be cleaned up when the parent HTTP request context is done.
+		// Individual handlers are responsible for calling their reqCancel functions.
+	}()
+
+	return results
 }

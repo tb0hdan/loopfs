@@ -12,9 +12,11 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+type infoData struct {
+	info *models.FileInfo
+}
+
 // FileInfoHandler handles file info requests.
-//
-//nolint:cyclop,funlen
 func (b *Balancer) FileInfoHandler(ctx echo.Context) error {
 	hash := ctx.Param("hash")
 	if hash == "" {
@@ -23,82 +25,73 @@ func (b *Balancer) FileInfoHandler(ctx echo.Context) error {
 		})
 	}
 
-	type infoResult struct {
-		backend string
-		info    *models.FileInfo
-		status  int
-		err     error
+	// Execute info request across all backends with early cancellation on success
+	results := executeBackendRequests(ctx.Request().Context(), b.backends, b.requestTimeout,
+		func(reqCtx context.Context, backend string) (infoData, int, error) {
+			return b.executeInfoRequest(reqCtx, backend, hash)
+		},
+		true, // Cancel on success - we only need one response
+	)
+
+	return b.processInfoResults(ctx, results)
+}
+
+func (b *Balancer) executeInfoRequest(reqCtx context.Context, backend, hash string) (infoData, int, error) {
+	req, err := retryablehttp.NewRequestWithContext(reqCtx, "GET", backend+"/file/"+hash+"/info", nil)
+	if err != nil {
+		return infoData{}, 0, err
 	}
 
-	results := make(chan infoResult, len(b.backends))
-	cancelCtx, cancel := context.WithCancel(ctx.Request().Context())
-	defer cancel()
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return infoData{}, 0, err
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("backend", backend).Msg("Failed to close info response body")
+		}
+	}()
 
-	// Query all backends in parallel
-	for _, backend := range b.backends {
-		go func(url string) {
-			reqCtx, reqCancel := context.WithTimeout(cancelCtx, b.requestTimeout)
-			defer reqCancel()
-
-			req, err := retryablehttp.NewRequestWithContext(reqCtx, "GET", url+"/file/"+hash+"/info", nil)
-			if err != nil {
-				results <- infoResult{backend: url, err: err}
-				return
-			}
-
-			resp, err := b.client.Do(req)
-			if err != nil {
-				results <- infoResult{backend: url, err: err}
-				return
-			}
-			defer func() {
-				if closeErr := resp.Body.Close(); closeErr != nil {
-					log.Warn().Err(closeErr).Str("backend", url).Msg("Failed to close info response body")
-				}
-			}()
-
-			if resp.StatusCode == http.StatusOK {
-				var info models.FileInfo
-				if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-					results <- infoResult{backend: url, err: err}
-					return
-				}
-				results <- infoResult{
-					backend: url,
-					info:    &info,
-					status:  resp.StatusCode,
-				}
-				cancel() // Cancel other requests on success
-			} else {
-				results <- infoResult{
-					backend: url,
-					status:  resp.StatusCode,
-				}
-			}
-		}(backend)
+	if resp.StatusCode == http.StatusOK {
+		var info models.FileInfo
+		if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+			return infoData{}, resp.StatusCode, err
+		}
+		return infoData{info: &info}, resp.StatusCode, nil
 	}
 
-	// Find successful result
+	return infoData{}, resp.StatusCode, nil
+}
+
+func (b *Balancer) processInfoResults(ctx echo.Context, results <-chan RequestResult[infoData]) error {
 	var lastError error
 	notFoundCount := 0
 
-	for range b.backends {
-		result := <-results
-		if result.err != nil {
-			lastError = result.err
-			log.Warn().Err(result.err).Str("backend", result.backend).Msg("Info request failed")
+	for result := range results {
+		// Clean up cancel function if present
+		if result.CtxCancel != nil {
+			defer result.CtxCancel()
+		}
+
+		if result.Error != nil {
+			lastError = result.Error
+			log.Warn().Err(result.Error).Str("backend", result.Backend).Msg("Info request failed")
 			continue
 		}
 
-		if result.status == http.StatusOK && result.info != nil {
-			return ctx.JSON(http.StatusOK, result.info)
+		if result.Status == http.StatusOK && result.Data.info != nil {
+			return ctx.JSON(http.StatusOK, result.Data.info)
 		}
 
-		if result.status == http.StatusNotFound {
+		if result.Status == http.StatusNotFound {
 			notFoundCount++
 		}
 	}
 
+	return b.buildInfoErrorResponse(ctx, notFoundCount, lastError)
+}
+
+func (b *Balancer) buildInfoErrorResponse(ctx echo.Context, notFoundCount int, lastError error) error {
 	// If all backends returned not found, return 404
 	if notFoundCount == len(b.backends) {
 		return ctx.JSON(http.StatusNotFound, map[string]string{

@@ -1,4 +1,4 @@
-package storemanager
+package manager
 
 import (
 	"errors"

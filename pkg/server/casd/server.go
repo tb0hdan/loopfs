@@ -13,9 +13,9 @@ import (
 	"time"
 
 	"loopfs/pkg/log"
+	"loopfs/pkg/manager"
 	"loopfs/pkg/store"
 	"loopfs/pkg/store/loop"
-	"loopfs/pkg/storemanager"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -33,7 +33,7 @@ type CASServer struct {
 	echo       *echo.Echo
 	version    string
 	store      store.Store
-	storeMgr   *storemanager.Manager
+	storeMgr   *manager.Manager
 	debug      bool
 	debugAddr  string
 }
@@ -44,8 +44,8 @@ func NewCASServer(storageDir, webDir, version string, storeImpl store.Store, deb
 
 func NewCASServerWithTempDir(storageDir, tempDir, webDir, version string, storeImpl store.Store, debug bool, debugAddr string) *CASServer {
 	// Check if storeImpl is actually a Store Manager
-	var storeMgr *storemanager.Manager
-	if mgr, ok := storeImpl.(*storemanager.Manager); ok {
+	var storeMgr *manager.Manager
+	if mgr, ok := storeImpl.(*manager.Manager); ok {
 		storeMgr = mgr
 	}
 

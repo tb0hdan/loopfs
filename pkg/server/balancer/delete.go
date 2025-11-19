@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"sync"
 
 	"loopfs/pkg/log"
 
@@ -12,9 +11,11 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+type deleteData struct {
+	body []byte
+}
+
 // DeleteHandler handles file deletion requests.
-//
-//nolint:cyclop,funlen
 func (b *Balancer) DeleteHandler(ctx echo.Context) error {
 	hash := ctx.Param("hash")
 	if hash == "" {
@@ -23,55 +24,38 @@ func (b *Balancer) DeleteHandler(ctx echo.Context) error {
 		})
 	}
 
-	type deleteResult struct {
-		backend string
-		status  int
-		body    []byte
-		err     error
+	// Execute delete request across all backends
+	results := executeBackendRequests(ctx.Request().Context(), b.backends, b.requestTimeout,
+		func(reqCtx context.Context, backend string) (deleteData, int, error) {
+			return b.executeDeleteRequest(reqCtx, backend, hash)
+		},
+		false, // Don't cancel on success - delete from all backends
+	)
+
+	return b.processDeleteResults(ctx, results, hash)
+}
+
+func (b *Balancer) executeDeleteRequest(reqCtx context.Context, backend, hash string) (deleteData, int, error) {
+	req, err := retryablehttp.NewRequestWithContext(reqCtx, "DELETE", backend+"/file/"+hash+"/delete", nil)
+	if err != nil {
+		return deleteData{}, 0, err
 	}
 
-	results := make(chan deleteResult, len(b.backends))
-	var waitGroup sync.WaitGroup
-
-	// Try to delete from all backends
-	for _, backend := range b.backends {
-		waitGroup.Add(1)
-		go func(url string) {
-			defer waitGroup.Done()
-
-			reqCtx, cancel := context.WithTimeout(ctx.Request().Context(), b.requestTimeout)
-			defer cancel()
-
-			req, err := retryablehttp.NewRequestWithContext(reqCtx, "DELETE", url+"/file/"+hash+"/delete", nil)
-			if err != nil {
-				results <- deleteResult{backend: url, err: err}
-				return
-			}
-
-			resp, err := b.client.Do(req)
-			if err != nil {
-				results <- deleteResult{backend: url, err: err}
-				return
-			}
-			defer func() {
-				if closeErr := resp.Body.Close(); closeErr != nil {
-					log.Warn().Err(closeErr).Str("backend", url).Msg("Failed to close delete response body")
-				}
-			}()
-
-			body, _ := io.ReadAll(resp.Body)
-			results <- deleteResult{
-				backend: url,
-				status:  resp.StatusCode,
-				body:    body,
-			}
-		}(backend)
+	resp, err := b.client.Do(req)
+	if err != nil {
+		return deleteData{}, 0, err
 	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.Warn().Err(closeErr).Str("backend", backend).Msg("Failed to close delete response body")
+		}
+	}()
 
-	waitGroup.Wait()
-	close(results)
+	body, _ := io.ReadAll(resp.Body)
+	return deleteData{body: body}, resp.StatusCode, nil
+}
 
-	// Collect results
+func (b *Balancer) processDeleteResults(ctx echo.Context, results <-chan RequestResult[deleteData], hash string) error {
 	var (
 		successCount  int
 		notFoundCount int
@@ -80,25 +64,39 @@ func (b *Balancer) DeleteHandler(ctx echo.Context) error {
 	)
 
 	for result := range results {
-		if result.err != nil {
-			lastError = result.err
-			log.Warn().Err(result.err).Str("backend", result.backend).Msg("Delete failed")
+		// Clean up cancel function if present
+		if result.CtxCancel != nil {
+			result.CtxCancel()
+		}
+
+		if result.Error != nil {
+			lastError = result.Error
+			log.Warn().Err(result.Error).Str("backend", result.Backend).Msg("Delete failed")
 			continue
 		}
 
-		switch result.status {
-		case http.StatusOK:
-			successCount++
-			if successBody == nil {
-				successBody = result.body
-			}
-		case http.StatusNotFound:
-			notFoundCount++
-		default:
-			log.Warn().Str("backend", result.backend).Int("status", result.status).Msg("Delete returned unexpected status")
-		}
+		successCount, notFoundCount, successBody = b.handleDeleteResult(result, successCount, notFoundCount, successBody)
 	}
 
+	return b.buildDeleteResponse(ctx, successCount, notFoundCount, lastError, successBody, hash)
+}
+
+func (b *Balancer) handleDeleteResult(result RequestResult[deleteData], successCount, notFoundCount int, successBody []byte) (int, int, []byte) {
+	switch result.Status {
+	case http.StatusOK:
+		successCount++
+		if successBody == nil {
+			successBody = result.Data.body
+		}
+	case http.StatusNotFound:
+		notFoundCount++
+	default:
+		log.Warn().Str("backend", result.Backend).Int("status", result.Status).Msg("Delete returned unexpected status")
+	}
+	return successCount, notFoundCount, successBody
+}
+
+func (b *Balancer) buildDeleteResponse(ctx echo.Context, successCount, notFoundCount int, lastError error, successBody []byte, hash string) error {
 	// If deleted from at least one backend, return success
 	if successCount > 0 {
 		if len(successBody) > 0 {
