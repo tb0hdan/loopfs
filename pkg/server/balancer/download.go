@@ -97,14 +97,14 @@ func (b *Balancer) streamDownloadResponse(ctx echo.Context, result RequestResult
 	b.copyResponseHeaders(ctx, resp)
 	ctx.Response().WriteHeader(http.StatusOK)
 
+	// Drain remaining results in background to prevent goroutine leaks
+	go b.drainRemainingResults(results)
+
 	if _, err := io.Copy(ctx.Response().Writer, resp.Body); err != nil {
 		return ctx.JSON(http.StatusServiceUnavailable, map[string]string{
 			"error": "Download failed: " + err.Error(),
 		})
 	}
-
-	// Drain remaining results in background to prevent goroutine leaks
-	go b.drainRemainingResults(results)
 
 	return nil
 }
@@ -122,10 +122,15 @@ func (b *Balancer) copyResponseHeaders(ctx echo.Context, resp *http.Response) {
 }
 
 func (b *Balancer) drainRemainingResults(results <-chan RequestResult[downloadData]) {
-	for r := range results {
+	for result := range results {
 		// Clean up any remaining cancel functions
-		if r.CtxCancel != nil {
-			r.CtxCancel()
+		if result.CtxCancel != nil {
+			result.CtxCancel()
+		}
+		if result.Data.resp != nil {
+			if closeErr := result.Data.resp.Body.Close(); closeErr != nil {
+				log.Warn().Err(closeErr).Str("backend", result.Backend).Msg("Failed to close download response body in drain")
+			}
 		}
 	}
 }
