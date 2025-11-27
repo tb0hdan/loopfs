@@ -2,6 +2,7 @@ package balancer
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 
@@ -24,8 +25,16 @@ func (b *Balancer) DownloadHandler(ctx echo.Context) error {
 		})
 	}
 
-	// Execute download request across all backends
-	results := executeBackendRequests(ctx.Request().Context(), b.backends, b.requestTimeout,
+	// Check if any backends are online
+	backends := b.backendManager.GetOnlineBackends()
+	if len(backends) == 0 {
+		return ctx.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": ErrAllBackendsDown.Error(),
+		})
+	}
+
+	// Execute download request across online backends
+	results := executeBackendRequests(ctx.Request().Context(), backends, b.requestTimeout,
 		func(reqCtx context.Context, backend string) (downloadData, int, error) {
 			return b.executeDownloadRequest(reqCtx, backend, hash)
 		},
@@ -43,6 +52,10 @@ func (b *Balancer) executeDownloadRequest(reqCtx context.Context, backend, hash 
 
 	resp, err := b.client.Do(req)
 	if err != nil {
+		// Mark backend as dead on timeout or connection errors
+		if isTimeoutOrConnectionError(err) {
+			b.backendManager.MarkBackendDead(backend, err)
+		}
 		return downloadData{}, 0, err
 	}
 
@@ -62,6 +75,7 @@ func (b *Balancer) executeDownloadRequest(reqCtx context.Context, backend, hash 
 func (b *Balancer) processDownloadResults(ctx echo.Context, results <-chan RequestResult[downloadData]) error {
 	var lastError error
 	notFoundCount := 0
+	backendCount := b.backendManager.BackendCount()
 
 	for result := range results {
 		if result.Error != nil {
@@ -79,7 +93,7 @@ func (b *Balancer) processDownloadResults(ctx echo.Context, results <-chan Reque
 		}
 	}
 
-	return b.buildDownloadErrorResponse(ctx, notFoundCount, lastError)
+	return b.buildDownloadErrorResponse(ctx, notFoundCount, backendCount, lastError)
 }
 
 func (b *Balancer) streamDownloadResponse(ctx echo.Context, result RequestResult[downloadData], results <-chan RequestResult[downloadData]) error {
@@ -135,9 +149,9 @@ func (b *Balancer) drainRemainingResults(results <-chan RequestResult[downloadDa
 	}
 }
 
-func (b *Balancer) buildDownloadErrorResponse(ctx echo.Context, notFoundCount int, lastError error) error {
+func (b *Balancer) buildDownloadErrorResponse(ctx echo.Context, notFoundCount, backendCount int, lastError error) error {
 	// If all backends returned not found, return 404
-	if notFoundCount == len(b.backends) {
+	if notFoundCount == backendCount {
 		return ctx.JSON(http.StatusNotFound, map[string]string{
 			"error": "File not found",
 		})
@@ -152,4 +166,64 @@ func (b *Balancer) buildDownloadErrorResponse(ctx echo.Context, notFoundCount in
 	return ctx.JSON(http.StatusServiceUnavailable, map[string]string{
 		"error": "Download failed from all backends",
 	})
+}
+
+// connectionErrorPatterns contains common error message patterns for timeout/connection errors.
+var connectionErrorPatterns = []string{
+	"timeout",
+	"deadline exceeded",
+	"connection refused",
+	"no such host",
+	"network is unreachable",
+	"i/o timeout",
+	"dial tcp", // Connection errors (includes DNS failures)
+	"dial udp", // UDP connection errors
+}
+
+// isTimeoutOrConnectionError checks if the error is a timeout or connection error.
+// It returns false for context.Canceled since that indicates intentional cancellation
+// (e.g., when another backend succeeded), not a backend failure.
+func isTimeoutOrConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// context.Canceled means intentional cancellation (e.g., another backend succeeded)
+	// This should NOT mark the backend as dead
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+
+	// Also check the error string for "context canceled" since wrapped errors
+	// may contain this text even if errors.Is doesn't match
+	errStr := err.Error()
+	if contains(errStr, "context canceled") {
+		return false
+	}
+
+	// context.DeadlineExceeded means timeout - this IS a connection issue
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+
+	// Check error message for common patterns
+	for _, pattern := range connectionErrorPatterns {
+		if contains(errStr, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsImpl(s, substr))
+}
+
+func containsImpl(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

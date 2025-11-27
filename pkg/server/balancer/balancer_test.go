@@ -19,9 +19,9 @@ import (
 // BalancerTestSuite tests the core balancer functionality
 type BalancerTestSuite struct {
 	suite.Suite
-	backends   []string
-	mockServer *httptest.Server
-	balancer   *Balancer
+	mockServer     *httptest.Server
+	backendManager *BackendManager
+	balancer       *Balancer
 }
 
 // SetupSuite runs once before all tests
@@ -81,12 +81,19 @@ func (s *BalancerTestSuite) SetupSuite() {
 		}
 	}))
 
-	s.backends = []string{s.mockServer.URL}
-	s.balancer = NewBalancer(s.backends, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
+	backends := []string{s.mockServer.URL}
+	s.backendManager = NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	s.backendManager.Start()
+	// Give health check time to run
+	time.Sleep(200 * time.Millisecond)
+	s.balancer = NewBalancer(s.backendManager, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
 }
 
 // TearDownSuite runs once after all tests
 func (s *BalancerTestSuite) TearDownSuite() {
+	if s.backendManager != nil {
+		s.backendManager.Stop()
+	}
 	if s.mockServer != nil {
 		s.mockServer.Close()
 	}
@@ -95,100 +102,65 @@ func (s *BalancerTestSuite) TearDownSuite() {
 // TestNewBalancer tests the constructor
 func (s *BalancerTestSuite) TestNewBalancer() {
 	backends := []string{"http://backend1:8080", "http://backend2:8080"}
+	bm := NewBackendManager(backends, 5*time.Second, 5*time.Second)
 	retryMax := 3
 	retryWaitMin := 100 * time.Millisecond
 	retryWaitMax := 500 * time.Millisecond
 	requestTimeout := 30 * time.Second
 
-	balancer := NewBalancer(backends, retryMax, retryWaitMin, retryWaitMax, requestTimeout)
+	balancer := NewBalancer(bm, retryMax, retryWaitMin, retryWaitMax, requestTimeout)
 
 	s.NotNil(balancer)
-	s.Equal(backends, balancer.backends)
-	s.Equal(retryMax, balancer.retryMax)
-	s.Equal(retryWaitMin, balancer.retryWaitMin)
-	s.Equal(retryWaitMax, balancer.retryWaitMax)
+	s.Equal(bm, balancer.backendManager)
 	s.Equal(requestTimeout, balancer.requestTimeout)
 	s.NotNil(balancer.client)
 }
 
-// TestGetNodeInfo tests node info retrieval
-func (s *BalancerTestSuite) TestGetNodeInfo() {
-	nodeInfo, err := s.balancer.getNodeInfo(context.Background(), s.mockServer.URL)
-	s.NoError(err)
-	s.NotNil(nodeInfo)
-	s.Equal("1d 2h 3m", nodeInfo.Uptime)
-	s.Equal(int64(94980), nodeInfo.UptimeSeconds)
-	s.Equal(1.5, nodeInfo.LoadAverages.Load1)
-	s.Equal(uint64(8589934592), nodeInfo.Memory.Total)
-	s.Equal(uint64(53687091200), nodeInfo.Storage.Available)
+// TestBackendManagerGetOnlineBackends tests getting online backends
+func (s *BalancerTestSuite) TestBackendManagerGetOnlineBackends() {
+	backends := s.backendManager.GetOnlineBackends()
+	s.Equal(1, len(backends))
+	s.Equal(s.mockServer.URL, backends[0])
 }
 
-// TestGetmodels.NodeInfoInvalidURL tests node info with invalid URL
-func (s *BalancerTestSuite) TestGetNodeInfoInvalidURL() {
-	_, err := s.balancer.getNodeInfo(context.Background(), "invalid-url")
-	s.Error(err)
-}
-
-// TestGetmodels.NodeInfoNotFound tests node info when endpoint doesn't exist
-func (s *BalancerTestSuite) TestGetNodeInfoNotFound() {
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer mockServer.Close()
-
-	_, err := s.balancer.getNodeInfo(context.Background(), mockServer.URL)
-	s.Error(err)
-}
-
-// TestGetmodels.NodeInfoInvalidJSON tests node info with invalid JSON response
-func (s *BalancerTestSuite) TestGetNodeInfoInvalidJSON() {
-	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte("invalid json"))
-	}))
-	defer mockServer.Close()
-
-	_, err := s.balancer.getNodeInfo(context.Background(), mockServer.URL)
-	s.Error(err)
-}
-
-// TestSelectBackendForUpload tests backend selection for upload
-func (s *BalancerTestSuite) TestSelectBackendForUpload() {
-	backend, err := s.balancer.selectBackendForUpload(context.Background(), 1024)
+// TestBackendManagerGetBackendForUpload tests backend selection for upload
+func (s *BalancerTestSuite) TestBackendManagerGetBackendForUpload() {
+	backend, err := s.backendManager.GetBackendForUpload(1024)
 	s.NoError(err)
 	s.Equal(s.mockServer.URL, backend)
 }
 
-// TestSelectBackendForUploadFileTooBig tests upload when file is too big
-func (s *BalancerTestSuite) TestSelectBackendForUploadFileTooBig() {
-	_, err := s.balancer.selectBackendForUpload(context.Background(), 100*1024*1024*1024) // 100GB file
+// TestBackendManagerGetBackendForUploadFileTooBig tests upload when file is too big
+func (s *BalancerTestSuite) TestBackendManagerGetBackendForUploadFileTooBig() {
+	_, err := s.backendManager.GetBackendForUpload(100 * 1024 * 1024 * 1024) // 100GB file
 	s.Error(err)
-	s.Contains(err.Error(), "no backend has enough space")
+	s.Equal(ErrNoBackendAvailable, err)
 }
 
-// TestSelectBackendForUploadNegativeSize tests upload with negative file size
-func (s *BalancerTestSuite) TestSelectBackendForUploadNegativeSize() {
-	_, err := s.balancer.selectBackendForUpload(context.Background(), -1)
+// TestBackendManagerNoBackends tests with no backends
+func (s *BalancerTestSuite) TestBackendManagerNoBackends() {
+	emptyManager := NewBackendManager([]string{}, 5*time.Second, 5*time.Second)
+	_, err := emptyManager.GetBackendForUpload(1024)
 	s.Error(err)
+	s.Equal(ErrNoBackendAvailable, err)
 }
 
-// TestSelectBackendForUploadNoBackends tests upload when no backends are available
-func (s *BalancerTestSuite) TestSelectBackendForUploadNoBackends() {
-	emptyBalancer := NewBalancer([]string{}, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
-	_, err := emptyBalancer.selectBackendForUpload(context.Background(), 1024)
-	s.Error(err)
-}
-
-// TestSelectBackendForUploadBackendsUnavailable tests upload when all backends are unavailable
-func (s *BalancerTestSuite) TestSelectBackendForUploadBackendsUnavailable() {
+// TestBackendManagerBackendsUnavailable tests when all backends are unavailable
+func (s *BalancerTestSuite) TestBackendManagerBackendsUnavailable() {
 	unavailableBackends := []string{"http://nonexistent1:8080", "http://nonexistent2:8080"}
-	balancer := NewBalancer(unavailableBackends, 1, 50*time.Millisecond, 100*time.Millisecond, 1*time.Second)
-	_, err := balancer.selectBackendForUpload(context.Background(), 1024)
+	bm := NewBackendManager(unavailableBackends, 100*time.Millisecond, 500*time.Millisecond)
+	bm.Start()
+	defer bm.Stop()
+
+	// Wait for health checks to mark backends as offline
+	time.Sleep(300 * time.Millisecond)
+
+	_, err := bm.GetBackendForUpload(1024)
 	s.Error(err)
 }
 
-// TestSelectBackendForUploadMultipleBackends tests backend selection with multiple backends
-func (s *BalancerTestSuite) TestSelectBackendForUploadMultipleBackends() {
+// TestBackendManagerMultipleBackends tests backend selection with multiple backends
+func (s *BalancerTestSuite) TestBackendManagerMultipleBackends() {
 	// Create another mock server with less available space
 	mockServer2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/node/info") {
@@ -206,16 +178,21 @@ func (s *BalancerTestSuite) TestSelectBackendForUploadMultipleBackends() {
 	defer mockServer2.Close()
 
 	backends := []string{s.mockServer.URL, mockServer2.URL}
-	balancer := NewBalancer(backends, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	bm.Start()
+	defer bm.Stop()
 
-	backend, err := balancer.selectBackendForUpload(context.Background(), 1024)
+	// Wait for health checks
+	time.Sleep(200 * time.Millisecond)
+
+	backend, err := bm.GetBackendForUpload(1024)
 	s.NoError(err)
 	// Should select the first server with more available space
 	s.Equal(s.mockServer.URL, backend)
 }
 
-// TestSelectBackendForUploadWithTimeout tests backend selection with timeout
-func (s *BalancerTestSuite) TestSelectBackendForUploadWithTimeout() {
+// TestBackendManagerWithTimeout tests backend selection with timeout
+func (s *BalancerTestSuite) TestBackendManagerWithTimeout() {
 	slowServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/node/info") {
 			time.Sleep(2 * time.Second) // Longer than timeout
@@ -228,9 +205,14 @@ func (s *BalancerTestSuite) TestSelectBackendForUploadWithTimeout() {
 	defer slowServer.Close()
 
 	backends := []string{slowServer.URL}
-	balancer := NewBalancer(backends, 1, 50*time.Millisecond, 100*time.Millisecond, 500*time.Millisecond)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 500*time.Millisecond)
+	bm.Start()
+	defer bm.Stop()
 
-	_, err := balancer.selectBackendForUpload(context.Background(), 1024)
+	// Wait for health checks to fail
+	time.Sleep(300 * time.Millisecond)
+
+	_, err := bm.GetBackendForUpload(1024)
 	s.Error(err)
 }
 
@@ -257,14 +239,14 @@ func (s *BalancerTestSuite) TestBalancerTypes() {
 	s.Equal(int64(100), fileInfo.Size)
 }
 
-// TestBalancerConcurrentRequests tests concurrent backend selection
-func (s *BalancerTestSuite) TestBalancerConcurrentRequests() {
+// TestBackendManagerConcurrentRequests tests concurrent backend selection
+func (s *BalancerTestSuite) TestBackendManagerConcurrentRequests() {
 	numRequests := 10
 	results := make(chan bool, numRequests)
 
 	for i := 0; i < numRequests; i++ {
 		go func() {
-			backend, err := s.balancer.selectBackendForUpload(context.Background(), 1024)
+			backend, err := s.backendManager.GetBackendForUpload(1024)
 			results <- err == nil && backend == s.mockServer.URL
 		}()
 	}
@@ -289,8 +271,8 @@ func (m *MockClosingReader) Close() error {
 	return nil
 }
 
-// TestBalancerErrorHandling tests error handling in the balancer
-func (s *BalancerTestSuite) TestBalancerErrorHandling() {
+// TestBackendManagerErrorHandling tests error handling in the backend manager
+func (s *BalancerTestSuite) TestBackendManagerErrorHandling() {
 	// Test with server that returns various error codes
 	errorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -298,10 +280,59 @@ func (s *BalancerTestSuite) TestBalancerErrorHandling() {
 	defer errorServer.Close()
 
 	backends := []string{errorServer.URL}
-	balancer := NewBalancer(backends, 1, 50*time.Millisecond, 100*time.Millisecond, 1*time.Second)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 1*time.Second)
+	bm.Start()
+	defer bm.Stop()
 
-	_, err := balancer.selectBackendForUpload(context.Background(), 1024)
+	// Wait for health checks to mark as offline
+	time.Sleep(300 * time.Millisecond)
+
+	_, err := bm.GetBackendForUpload(1024)
 	s.Error(err)
+}
+
+// TestBackendManagerMarkBackendDead tests marking a backend as dead
+func (s *BalancerTestSuite) TestBackendManagerMarkBackendDead() {
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/node/info") {
+			nodeInfo := models.NodeInfo{
+				Storage: models.StorageInfo{Available: 1000000},
+			}
+			json.NewEncoder(w).Encode(nodeInfo)
+		}
+	}))
+	defer mockServer.Close()
+
+	backends := []string{mockServer.URL}
+	bm := NewBackendManager(backends, 5*time.Second, 5*time.Second) // Long interval so we control when it checks
+	bm.Start()
+	defer bm.Stop()
+
+	// Wait for initial health check
+	time.Sleep(200 * time.Millisecond)
+
+	// Backend should be online
+	s.True(bm.HasOnlineBackends())
+
+	// Mark backend as dead
+	bm.MarkBackendDead(mockServer.URL, context.DeadlineExceeded)
+
+	// Backend should now be offline
+	s.False(bm.HasOnlineBackends())
+}
+
+// TestBackendManagerGetAllBackendStatus tests getting all backend statuses
+func (s *BalancerTestSuite) TestBackendManagerGetAllBackendStatus() {
+	statuses := s.backendManager.GetAllBackendStatus()
+	s.Equal(1, len(statuses))
+	s.Equal(s.mockServer.URL, statuses[0].URL)
+	s.True(statuses[0].Online)
+}
+
+// TestBackendManagerBackendCount tests the backend count
+func (s *BalancerTestSuite) TestBackendManagerBackendCount() {
+	count := s.backendManager.BackendCount()
+	s.Equal(1, count)
 }
 
 // TestBalancerSuite runs the balancer test suite

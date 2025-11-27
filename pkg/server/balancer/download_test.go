@@ -16,8 +16,9 @@ import (
 // DownloadTestSuite tests the download functionality
 type DownloadTestSuite struct {
 	suite.Suite
-	balancer    *Balancer
-	mockBackend *httptest.Server
+	balancer       *Balancer
+	backendManager *BackendManager
+	mockBackend    *httptest.Server
 }
 
 // SetupSuite runs once before all tests
@@ -25,6 +26,9 @@ func (s *DownloadTestSuite) SetupSuite() {
 	// Create a mock backend server
 	s.mockBackend = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/node/info"):
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"storage":{"available":53687091200}}`))
 		case strings.Contains(r.URL.Path, "/file/") && strings.HasSuffix(r.URL.Path, "/download"):
 			hash := extractHashFromPath(r.URL.Path, "/download")
 			switch hash {
@@ -50,11 +54,17 @@ func (s *DownloadTestSuite) SetupSuite() {
 	}))
 
 	backends := []string{s.mockBackend.URL}
-	s.balancer = NewBalancer(backends, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
+	s.backendManager = NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	s.backendManager.Start()
+	time.Sleep(200 * time.Millisecond) // Wait for initial health check
+	s.balancer = NewBalancer(s.backendManager, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
 }
 
 // TearDownSuite runs once after all tests
 func (s *DownloadTestSuite) TearDownSuite() {
+	if s.backendManager != nil {
+		s.backendManager.Stop()
+	}
 	if s.mockBackend != nil {
 		s.mockBackend.Close()
 	}
@@ -69,6 +79,14 @@ func extractHashFromPath(path, suffix string) string {
 		}
 	}
 	return ""
+}
+
+// createBalancerWithBackends creates a balancer with the given backends
+func createBalancerWithBackends(backends []string) (*Balancer, *BackendManager) {
+	bm := NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	bm.Start()
+	time.Sleep(200 * time.Millisecond)
+	return NewBalancer(bm, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second), bm
 }
 
 // TestDownloadHandlerSuccess tests successful file download
@@ -148,13 +166,21 @@ func (s *DownloadTestSuite) TestDownloadHandlerDifferentContentTypes() {
 func (s *DownloadTestSuite) TestDownloadHandlerMultipleBackends() {
 	// Create a second backend that doesn't have the file
 	mockBackend2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
+		if strings.HasSuffix(r.URL.Path, "/node/info") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"storage":{"available":53687091200}}`))
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	defer mockBackend2.Close()
 
 	// Create a third backend that has the file
 	mockBackend3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/file/") && strings.HasSuffix(r.URL.Path, "/download") {
+		if strings.HasSuffix(r.URL.Path, "/node/info") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"storage":{"available":53687091200}}`))
+		} else if strings.Contains(r.URL.Path, "/file/") && strings.HasSuffix(r.URL.Path, "/download") {
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("content from backend 3"))
@@ -163,7 +189,8 @@ func (s *DownloadTestSuite) TestDownloadHandlerMultipleBackends() {
 	defer mockBackend3.Close()
 
 	backends := []string{mockBackend2.URL, mockBackend3.URL}
-	balancer := NewBalancer(backends, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
+	balancer, bm := createBalancerWithBackends(backends)
+	defer bm.Stop()
 
 	e := echo.New()
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -179,10 +206,15 @@ func (s *DownloadTestSuite) TestDownloadHandlerMultipleBackends() {
 	s.Equal("content from backend 3", rec.Body.String())
 }
 
-// TestDownloadHandlerAllBackendsUnavailable tests download when all backends are unavailable
+// TestDownloadHandlerAllBackendsUnavailable tests download when all backends are offline
 func (s *DownloadTestSuite) TestDownloadHandlerAllBackendsUnavailable() {
 	backends := []string{"http://nonexistent1:8080", "http://nonexistent2:8080"}
-	balancer := NewBalancer(backends, 1, 50*time.Millisecond, 100*time.Millisecond, 1*time.Second)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 500*time.Millisecond)
+	bm.Start()
+	defer bm.Stop()
+	time.Sleep(300 * time.Millisecond) // Wait for health checks to fail
+
+	balancer := NewBalancer(bm, 1, 50*time.Millisecond, 100*time.Millisecond, 1*time.Second)
 
 	e := echo.New()
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -199,18 +231,24 @@ func (s *DownloadTestSuite) TestDownloadHandlerAllBackendsUnavailable() {
 	var response map[string]string
 	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	s.NoError(err)
-	s.Contains(response["error"], "Download failed")
+	s.Contains(response["error"], "all backends are offline")
 }
 
 // TestDownloadHandlerBackendError tests download when backend returns error
 func (s *DownloadTestSuite) TestDownloadHandlerBackendError() {
 	errorBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
+		if strings.HasSuffix(r.URL.Path, "/node/info") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"storage":{"available":53687091200}}`))
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
 	}))
 	defer errorBackend.Close()
 
 	backends := []string{errorBackend.URL}
-	balancer := NewBalancer(backends, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
+	balancer, bm := createBalancerWithBackends(backends)
+	defer bm.Stop()
 
 	e := echo.New()
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -228,13 +266,23 @@ func (s *DownloadTestSuite) TestDownloadHandlerBackendError() {
 // TestDownloadHandlerTimeout tests download with timeout
 func (s *DownloadTestSuite) TestDownloadHandlerTimeout() {
 	slowBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(2 * time.Second) // Longer than timeout
-		w.WriteHeader(http.StatusOK)
+		if strings.HasSuffix(r.URL.Path, "/node/info") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"storage":{"available":53687091200}}`))
+		} else {
+			time.Sleep(2 * time.Second) // Longer than timeout
+			w.WriteHeader(http.StatusOK)
+		}
 	}))
 	defer slowBackend.Close()
 
 	backends := []string{slowBackend.URL}
-	balancer := NewBalancer(backends, 1, 50*time.Millisecond, 100*time.Millisecond, 500*time.Millisecond)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	bm.Start()
+	defer bm.Stop()
+	time.Sleep(200 * time.Millisecond)
+
+	balancer := NewBalancer(bm, 1, 50*time.Millisecond, 100*time.Millisecond, 500*time.Millisecond)
 
 	e := echo.New()
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -281,7 +329,10 @@ func (s *DownloadTestSuite) TestDownloadHandlerLargeFile() {
 	largeContent := bytes.Repeat([]byte("large file content "), 1000) // About 19KB
 
 	largeFileBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/file/") && strings.HasSuffix(r.URL.Path, "/download") {
+		if strings.HasSuffix(r.URL.Path, "/node/info") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"storage":{"available":53687091200}}`))
+		} else if strings.Contains(r.URL.Path, "/file/") && strings.HasSuffix(r.URL.Path, "/download") {
 			w.Header().Set("Content-Type", "application/octet-stream")
 			w.WriteHeader(http.StatusOK)
 			w.Write(largeContent)
@@ -290,7 +341,8 @@ func (s *DownloadTestSuite) TestDownloadHandlerLargeFile() {
 	defer largeFileBackend.Close()
 
 	backends := []string{largeFileBackend.URL}
-	balancer := NewBalancer(backends, 3, 100*time.Millisecond, 500*time.Millisecond, 30*time.Second)
+	balancer, bm := createBalancerWithBackends(backends)
+	defer bm.Stop()
 
 	e := echo.New()
 	hash := "largef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -309,7 +361,10 @@ func (s *DownloadTestSuite) TestDownloadHandlerLargeFile() {
 // TestDownloadHandlerHeaderForwarding tests that headers are properly forwarded
 func (s *DownloadTestSuite) TestDownloadHandlerHeaderForwarding() {
 	headerBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/file/") && strings.HasSuffix(r.URL.Path, "/download") {
+		if strings.HasSuffix(r.URL.Path, "/node/info") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"storage":{"available":53687091200}}`))
+		} else if strings.Contains(r.URL.Path, "/file/") && strings.HasSuffix(r.URL.Path, "/download") {
 			w.Header().Set("Content-Type", "text/plain")
 			w.Header().Set("Content-Disposition", "attachment; filename=test.txt")
 			w.Header().Set("Cache-Control", "max-age=3600")
@@ -321,7 +376,8 @@ func (s *DownloadTestSuite) TestDownloadHandlerHeaderForwarding() {
 	defer headerBackend.Close()
 
 	backends := []string{headerBackend.URL}
-	balancer := NewBalancer(backends, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
+	balancer, bm := createBalancerWithBackends(backends)
+	defer bm.Stop()
 
 	e := echo.New()
 	hash := "header1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -345,19 +401,32 @@ func (s *DownloadTestSuite) TestDownloadHandlerHeaderForwarding() {
 func (s *DownloadTestSuite) TestDownloadHandlerPartialBackendFailures() {
 	// First backend returns error
 	errorBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
+		if strings.HasSuffix(r.URL.Path, "/node/info") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"storage":{"available":53687091200}}`))
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
 	}))
 	defer errorBackend.Close()
 
 	// Second backend returns not found
 	notFoundBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
+		if strings.HasSuffix(r.URL.Path, "/node/info") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"storage":{"available":53687091200}}`))
+		} else {
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	defer notFoundBackend.Close()
 
 	// Third backend succeeds
 	successBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/file/") && strings.HasSuffix(r.URL.Path, "/download") {
+		if strings.HasSuffix(r.URL.Path, "/node/info") {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`{"storage":{"available":53687091200}}`))
+		} else if strings.Contains(r.URL.Path, "/file/") && strings.HasSuffix(r.URL.Path, "/download") {
 			w.Header().Set("Content-Type", "text/plain")
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte("success content"))
@@ -366,7 +435,12 @@ func (s *DownloadTestSuite) TestDownloadHandlerPartialBackendFailures() {
 	defer successBackend.Close()
 
 	backends := []string{errorBackend.URL, notFoundBackend.URL, successBackend.URL}
-	balancer := NewBalancer(backends, 1, 50*time.Millisecond, 100*time.Millisecond, 5*time.Second)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	bm.Start()
+	defer bm.Stop()
+	time.Sleep(200 * time.Millisecond)
+
+	balancer := NewBalancer(bm, 1, 50*time.Millisecond, 100*time.Millisecond, 5*time.Second)
 
 	e := echo.New()
 	hash := "partial1234567890abcdef1234567890abcdef1234567890abcdef1234567890"

@@ -24,8 +24,16 @@ func (b *Balancer) DeleteHandler(ctx echo.Context) error {
 		})
 	}
 
-	// Execute delete request across all backends
-	results := executeBackendRequests(ctx.Request().Context(), b.backends, b.requestTimeout,
+	// Check if any backends are online
+	backends := b.backendManager.GetOnlineBackends()
+	if len(backends) == 0 {
+		return ctx.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": ErrAllBackendsDown.Error(),
+		})
+	}
+
+	// Execute delete request across online backends
+	results := executeBackendRequests(ctx.Request().Context(), backends, b.requestTimeout,
 		func(reqCtx context.Context, backend string) (deleteData, int, error) {
 			return b.executeDeleteRequest(reqCtx, backend, hash)
 		},
@@ -43,6 +51,10 @@ func (b *Balancer) executeDeleteRequest(reqCtx context.Context, backend, hash st
 
 	resp, err := b.client.Do(req)
 	if err != nil {
+		// Mark backend as dead on timeout or connection errors
+		if isTimeoutOrConnectionError(err) {
+			b.backendManager.MarkBackendDead(backend, err)
+		}
 		return deleteData{}, 0, err
 	}
 	defer func() {
@@ -63,6 +75,8 @@ func (b *Balancer) processDeleteResults(ctx echo.Context, results <-chan Request
 		successBody   []byte
 	)
 
+	backendCount := b.backendManager.BackendCount()
+
 	for result := range results {
 		// Clean up cancel function if present
 		if result.CtxCancel != nil {
@@ -78,7 +92,7 @@ func (b *Balancer) processDeleteResults(ctx echo.Context, results <-chan Request
 		successCount, notFoundCount, successBody = b.handleDeleteResult(result, successCount, notFoundCount, successBody)
 	}
 
-	return b.buildDeleteResponse(ctx, successCount, notFoundCount, lastError, successBody, hash)
+	return b.buildDeleteResponse(ctx, successCount, notFoundCount, backendCount, lastError, successBody, hash)
 }
 
 func (b *Balancer) handleDeleteResult(result RequestResult[deleteData], successCount, notFoundCount int, successBody []byte) (int, int, []byte) {
@@ -96,7 +110,7 @@ func (b *Balancer) handleDeleteResult(result RequestResult[deleteData], successC
 	return successCount, notFoundCount, successBody
 }
 
-func (b *Balancer) buildDeleteResponse(ctx echo.Context, successCount, notFoundCount int, lastError error, successBody []byte, hash string) error {
+func (b *Balancer) buildDeleteResponse(ctx echo.Context, successCount, notFoundCount, backendCount int, lastError error, successBody []byte, hash string) error {
 	// If deleted from at least one backend, return success
 	if successCount > 0 {
 		if len(successBody) > 0 {
@@ -109,7 +123,7 @@ func (b *Balancer) buildDeleteResponse(ctx echo.Context, successCount, notFoundC
 	}
 
 	// If all backends returned not found, return 404
-	if notFoundCount == len(b.backends) {
+	if notFoundCount == backendCount {
 		return ctx.JSON(http.StatusNotFound, map[string]string{
 			"error": "File not found",
 		})

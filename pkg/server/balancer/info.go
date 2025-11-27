@@ -25,8 +25,16 @@ func (b *Balancer) FileInfoHandler(ctx echo.Context) error {
 		})
 	}
 
-	// Execute info request across all backends with early cancellation on success
-	results := executeBackendRequests(ctx.Request().Context(), b.backends, b.requestTimeout,
+	// Check if any backends are online
+	backends := b.backendManager.GetOnlineBackends()
+	if len(backends) == 0 {
+		return ctx.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": ErrAllBackendsDown.Error(),
+		})
+	}
+
+	// Execute info request across online backends with early cancellation on success
+	results := executeBackendRequests(ctx.Request().Context(), backends, b.requestTimeout,
 		func(reqCtx context.Context, backend string) (infoData, int, error) {
 			return b.executeInfoRequest(reqCtx, backend, hash)
 		},
@@ -44,6 +52,10 @@ func (b *Balancer) executeInfoRequest(reqCtx context.Context, backend, hash stri
 
 	resp, err := b.client.Do(req)
 	if err != nil {
+		// Mark backend as dead on timeout or connection errors
+		if isTimeoutOrConnectionError(err) {
+			b.backendManager.MarkBackendDead(backend, err)
+		}
 		return infoData{}, 0, err
 	}
 	defer func() {
@@ -66,6 +78,7 @@ func (b *Balancer) executeInfoRequest(reqCtx context.Context, backend, hash stri
 func (b *Balancer) processInfoResults(ctx echo.Context, results <-chan RequestResult[infoData]) error {
 	var lastError error
 	notFoundCount := 0
+	backendCount := b.backendManager.BackendCount()
 
 	for result := range results {
 		// Clean up cancel function if present
@@ -88,12 +101,12 @@ func (b *Balancer) processInfoResults(ctx echo.Context, results <-chan RequestRe
 		}
 	}
 
-	return b.buildInfoErrorResponse(ctx, notFoundCount, lastError)
+	return b.buildInfoErrorResponse(ctx, notFoundCount, backendCount, lastError)
 }
 
-func (b *Balancer) buildInfoErrorResponse(ctx echo.Context, notFoundCount int, lastError error) error {
+func (b *Balancer) buildInfoErrorResponse(ctx echo.Context, notFoundCount, backendCount int, lastError error) error {
 	// If all backends returned not found, return 404
-	if notFoundCount == len(b.backends) {
+	if notFoundCount == backendCount {
 		return ctx.JSON(http.StatusNotFound, map[string]string{
 			"error": "File not found",
 		})

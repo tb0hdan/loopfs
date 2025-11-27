@@ -43,7 +43,9 @@ func (s *ServerTestSuite) SetupTest() {
 		10*time.Second,       // gracefulShutdownTimeout
 		100*time.Millisecond, // retryWaitMin
 		500*time.Millisecond, // retryWaitMax
-		5*time.Second,        // requestTimeout,
+		5*time.Second,        // requestTimeout
+		5*time.Second,        // healthCheckInterval
+		5*time.Second,        // healthCheckTimeout
 		false,
 		"",
 	)
@@ -57,17 +59,21 @@ func (s *ServerTestSuite) TestNewBalancerServer() {
 	retryWaitMin := 200 * time.Millisecond
 	retryWaitMax := 1 * time.Second
 	requestTimeout := 10 * time.Second
+	healthCheckInterval := 5 * time.Second
+	healthCheckTimeout := 5 * time.Second
 
 	server := NewBalancerServer(backendList, retryMax, gracefulShutdownTimeout, retryWaitMin, retryWaitMax,
-		requestTimeout, false, "")
+		requestTimeout, healthCheckInterval, healthCheckTimeout, false, "")
 
 	s.NotNil(server)
-	s.Equal(backendList, server.backendList)
+	s.Equal(backendList, server.backendURLs)
 	s.Equal(retryMax, server.retryMax)
 	s.Equal(gracefulShutdownTimeout, server.gracefulShutdownTimeout)
 	s.Equal(retryWaitMin, server.retryWaitMin)
 	s.Equal(retryWaitMax, server.retryWaitMax)
 	s.Equal(requestTimeout, server.requestTimeout)
+	s.Equal(healthCheckInterval, server.healthCheckInterval)
+	s.Equal(healthCheckTimeout, server.healthCheckTimeout)
 	s.NotNil(server.echo)
 	s.IsType(&echo.Echo{}, server.echo)
 }
@@ -81,6 +87,8 @@ func (s *ServerTestSuite) TestServerDefaultSettings() {
 		100*time.Millisecond,
 		1*time.Second,
 		30*time.Second,
+		5*time.Second,
+		5*time.Second,
 		false,
 		"",
 	)
@@ -92,7 +100,9 @@ func (s *ServerTestSuite) TestServerDefaultSettings() {
 
 // TestSetupRoutes tests route configuration
 func (s *ServerTestSuite) TestSetupRoutes() {
-	balancer := NewBalancer(s.server.backendList, s.server.retryMax, s.server.retryWaitMin, s.server.retryWaitMax, s.server.requestTimeout)
+	bm := NewBackendManager(s.server.backendURLs, s.server.healthCheckInterval, s.server.healthCheckTimeout)
+	s.server.backendManager = bm
+	balancer := NewBalancer(bm, s.server.retryMax, s.server.retryWaitMin, s.server.retryWaitMax, s.server.requestTimeout)
 	s.server.setupRoutes(balancer)
 
 	routes := s.server.echo.Routes()
@@ -108,11 +118,14 @@ func (s *ServerTestSuite) TestSetupRoutes() {
 	s.True(routePaths["/file/:hash/download"])
 	s.True(routePaths["/file/:hash/info"])
 	s.True(routePaths["/file/:hash/delete"])
+	s.True(routePaths["/backends/status"]) // New status endpoint
 }
 
 // TestSetupRoutesMiddleware tests middleware configuration
 func (s *ServerTestSuite) TestSetupRoutesMiddleware() {
-	balancer := NewBalancer(s.server.backendList, s.server.retryMax, s.server.retryWaitMin, s.server.retryWaitMax, s.server.requestTimeout)
+	bm := NewBackendManager(s.server.backendURLs, s.server.healthCheckInterval, s.server.healthCheckTimeout)
+	s.server.backendManager = bm
+	balancer := NewBalancer(bm, s.server.retryMax, s.server.retryWaitMin, s.server.retryWaitMax, s.server.requestTimeout)
 	s.server.setupRoutes(balancer)
 
 	// Test that middleware is configured by making a request
@@ -179,6 +192,8 @@ func (s *ServerTestSuite) TestServerConfiguration() {
 		retryWaitMin            time.Duration
 		retryWaitMax            time.Duration
 		requestTimeout          time.Duration
+		healthCheckInterval     time.Duration
+		healthCheckTimeout      time.Duration
 	}{
 		{
 			name:                    "minimal_config",
@@ -188,6 +203,8 @@ func (s *ServerTestSuite) TestServerConfiguration() {
 			retryWaitMin:            10 * time.Millisecond,
 			retryWaitMax:            100 * time.Millisecond,
 			requestTimeout:          1 * time.Second,
+			healthCheckInterval:     1 * time.Second,
+			healthCheckTimeout:      1 * time.Second,
 		},
 		{
 			name:                    "high_performance_config",
@@ -197,6 +214,8 @@ func (s *ServerTestSuite) TestServerConfiguration() {
 			retryWaitMin:            50 * time.Millisecond,
 			retryWaitMax:            2 * time.Second,
 			requestTimeout:          60 * time.Second,
+			healthCheckInterval:     10 * time.Second,
+			healthCheckTimeout:      5 * time.Second,
 		},
 		{
 			name:                    "no_backends",
@@ -206,6 +225,8 @@ func (s *ServerTestSuite) TestServerConfiguration() {
 			retryWaitMin:            100 * time.Millisecond,
 			retryWaitMax:            1 * time.Second,
 			requestTimeout:          30 * time.Second,
+			healthCheckInterval:     5 * time.Second,
+			healthCheckTimeout:      5 * time.Second,
 		},
 	}
 
@@ -218,16 +239,20 @@ func (s *ServerTestSuite) TestServerConfiguration() {
 				tc.retryWaitMin,
 				tc.retryWaitMax,
 				tc.requestTimeout,
+				tc.healthCheckInterval,
+				tc.healthCheckTimeout,
 				false,
 				"",
 			)
 
-			s.Equal(tc.backendList, server.backendList)
+			s.Equal(tc.backendList, server.backendURLs)
 			s.Equal(tc.retryMax, server.retryMax)
 			s.Equal(tc.gracefulShutdownTimeout, server.gracefulShutdownTimeout)
 			s.Equal(tc.retryWaitMin, server.retryWaitMin)
 			s.Equal(tc.retryWaitMax, server.retryWaitMax)
 			s.Equal(tc.requestTimeout, server.requestTimeout)
+			s.Equal(tc.healthCheckInterval, server.healthCheckInterval)
+			s.Equal(tc.healthCheckTimeout, server.healthCheckTimeout)
 		})
 	}
 }
@@ -242,16 +267,20 @@ func (s *ServerTestSuite) TestServerWithInvalidBackends() {
 		100*time.Millisecond,
 		1*time.Second,
 		30*time.Second,
+		5*time.Second,
+		5*time.Second,
 		false,
 		"",
 	)
 
 	// Server should still be created successfully
 	s.NotNil(server)
-	s.Equal(invalidBackends, server.backendList)
+	s.Equal(invalidBackends, server.backendURLs)
 
 	// Test that routes can be setup even with invalid backends
-	balancer := NewBalancer(server.backendList, server.retryMax, server.retryWaitMin, server.retryWaitMax, server.requestTimeout)
+	bm := NewBackendManager(server.backendURLs, server.healthCheckInterval, server.healthCheckTimeout)
+	server.backendManager = bm
+	balancer := NewBalancer(bm, server.retryMax, server.retryWaitMin, server.retryWaitMax, server.requestTimeout)
 	s.NotPanics(func() {
 		server.setupRoutes(balancer)
 	})
@@ -259,7 +288,9 @@ func (s *ServerTestSuite) TestServerWithInvalidBackends() {
 
 // TestServerEchoConfiguration tests Echo framework configuration
 func (s *ServerTestSuite) TestServerEchoConfiguration() {
-	balancer := NewBalancer(s.server.backendList, s.server.retryMax, s.server.retryWaitMin, s.server.retryWaitMax, s.server.requestTimeout)
+	bm := NewBackendManager(s.server.backendURLs, s.server.healthCheckInterval, s.server.healthCheckTimeout)
+	s.server.backendManager = bm
+	balancer := NewBalancer(bm, s.server.retryMax, s.server.retryWaitMin, s.server.retryWaitMax, s.server.requestTimeout)
 	s.server.setupRoutes(balancer)
 
 	// Test Echo configuration
@@ -323,6 +354,8 @@ func (s *ServerTestSuite) TestServerZeroTimeouts() {
 		0, // zero retry wait min
 		0, // zero retry wait max
 		0, // zero request timeout
+		0, // zero health check interval
+		0, // zero health check timeout
 		false,
 		"",
 	)
@@ -337,6 +370,15 @@ func (s *ServerTestSuite) TestServerZeroTimeouts() {
 	// Should still be able to shutdown
 	err := server.Shutdown()
 	s.NoError(err)
+}
+
+// TestServerBackendManagerIntegration tests that BackendManager is properly returned
+func (s *ServerTestSuite) TestServerBackendManagerIntegration() {
+	bm := NewBackendManager(s.server.backendURLs, s.server.healthCheckInterval, s.server.healthCheckTimeout)
+	s.server.backendManager = bm
+
+	returnedBM := s.server.BackendManager()
+	s.Equal(bm, returnedBM)
 }
 
 // TestServerSuite runs the server test suite

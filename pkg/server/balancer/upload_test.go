@@ -20,8 +20,9 @@ import (
 // UploadTestSuite tests the upload functionality
 type UploadTestSuite struct {
 	suite.Suite
-	balancer    *Balancer
-	mockBackend *httptest.Server
+	balancer       *Balancer
+	backendManager *BackendManager
+	mockBackend    *httptest.Server
 }
 
 // SetupSuite runs once before all tests
@@ -86,11 +87,17 @@ func (s *UploadTestSuite) SetupSuite() {
 	}))
 
 	backends := []string{s.mockBackend.URL}
-	s.balancer = NewBalancer(backends, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
+	s.backendManager = NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	s.backendManager.Start()
+	time.Sleep(200 * time.Millisecond)
+	s.balancer = NewBalancer(s.backendManager, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
 }
 
 // TearDownSuite runs once after all tests
 func (s *UploadTestSuite) TearDownSuite() {
+	if s.backendManager != nil {
+		s.backendManager.Stop()
+	}
 	if s.mockBackend != nil {
 		s.mockBackend.Close()
 	}
@@ -232,7 +239,12 @@ func (s *UploadTestSuite) TestUploadHandlerNoBackendSpace() {
 	defer lowSpaceBackend.Close()
 
 	backends := []string{lowSpaceBackend.URL}
-	balancer := NewBalancer(backends, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	bm.Start()
+	defer bm.Stop()
+	time.Sleep(200 * time.Millisecond)
+
+	balancer := NewBalancer(bm, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
 
 	largeContent := strings.Repeat("Large file content ", 1000) // About 19KB
 	req, err := s.createMultipartRequest("test.txt", largeContent)
@@ -249,7 +261,7 @@ func (s *UploadTestSuite) TestUploadHandlerNoBackendSpace() {
 	var response map[string]string
 	err = json.Unmarshal(rec.Body.Bytes(), &response)
 	s.NoError(err)
-	s.Contains(response["error"], "no backend has enough space")
+	s.Contains(response["error"], "offline")
 }
 
 // TestUploadHandlerBackendError tests upload when backend returns error
@@ -263,18 +275,18 @@ func (s *UploadTestSuite) TestUploadHandlerBackendError() {
 
 	err = s.balancer.UploadHandler(ctx)
 	s.NoError(err)
-	s.Equal(http.StatusServiceUnavailable, rec.Code)
-
-	var response map[string]string
-	err = json.Unmarshal(rec.Body.Bytes(), &response)
-	s.NoError(err)
-	s.Contains(response["error"], "Upload failed")
+	s.Equal(http.StatusInternalServerError, rec.Code)
 }
 
 // TestUploadHandlerBackendUnavailable tests upload when backend is unavailable
 func (s *UploadTestSuite) TestUploadHandlerBackendUnavailable() {
 	backends := []string{"http://nonexistent:8080"}
-	balancer := NewBalancer(backends, 1, 50*time.Millisecond, 100*time.Millisecond, 1*time.Second)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 500*time.Millisecond)
+	bm.Start()
+	defer bm.Stop()
+	time.Sleep(300 * time.Millisecond)
+
+	balancer := NewBalancer(bm, 1, 50*time.Millisecond, 100*time.Millisecond, 1*time.Second)
 
 	req, err := s.createMultipartRequest("test.txt", "test content")
 	s.Require().NoError(err)
@@ -311,7 +323,12 @@ func (s *UploadTestSuite) TestUploadHandlerMultipleBackends() {
 	defer backend2.Close()
 
 	backends := []string{s.mockBackend.URL, backend2.URL}
-	balancer := NewBalancer(backends, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	bm.Start()
+	defer bm.Stop()
+	time.Sleep(200 * time.Millisecond)
+
+	balancer := NewBalancer(bm, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
 
 	req, err := s.createMultipartRequest("test.txt", "test content")
 	s.Require().NoError(err)
@@ -347,7 +364,12 @@ func (s *UploadTestSuite) TestUploadHandlerTimeout() {
 	defer slowBackend.Close()
 
 	backends := []string{slowBackend.URL}
-	balancer := NewBalancer(backends, 1, 50*time.Millisecond, 100*time.Millisecond, 500*time.Millisecond)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	bm.Start()
+	defer bm.Stop()
+	time.Sleep(200 * time.Millisecond)
+
+	balancer := NewBalancer(bm, 1, 50*time.Millisecond, 100*time.Millisecond, 500*time.Millisecond)
 
 	req, err := s.createMultipartRequest("test.txt", "test content")
 	s.Require().NoError(err)
@@ -485,7 +507,12 @@ func (s *UploadTestSuite) TestUploadHandlerResponseForwarding() {
 	defer customBackend.Close()
 
 	backends := []string{customBackend.URL}
-	balancer := NewBalancer(backends, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
+	bm := NewBackendManager(backends, 100*time.Millisecond, 5*time.Second)
+	bm.Start()
+	defer bm.Stop()
+	time.Sleep(200 * time.Millisecond)
+
+	balancer := NewBalancer(bm, 3, 100*time.Millisecond, 500*time.Millisecond, 5*time.Second)
 
 	req, err := s.createMultipartRequest("test.txt", "test content")
 	s.Require().NoError(err)

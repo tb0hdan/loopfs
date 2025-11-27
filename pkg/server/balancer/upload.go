@@ -19,6 +19,13 @@ import (
 //
 //nolint:cyclop,funlen
 func (b *Balancer) UploadHandler(ctx echo.Context) error {
+	// Check if any backends are online
+	if !b.backendManager.HasOnlineBackends() {
+		return ctx.JSON(http.StatusServiceUnavailable, map[string]string{
+			"error": ErrAllBackendsDown.Error(),
+		})
+	}
+
 	// Parse multipart form
 	file, err := ctx.FormFile("file")
 	if err != nil {
@@ -31,8 +38,13 @@ func (b *Balancer) UploadHandler(ctx echo.Context) error {
 	fileSize := file.Size
 
 	// Select backend with most available space
-	backend, err := b.selectBackendForUpload(ctx.Request().Context(), fileSize)
+	backend, err := b.backendManager.GetBackendForUpload(fileSize)
 	if err != nil {
+		if errors.Is(err, ErrNoBackendAvailable) {
+			return ctx.JSON(http.StatusServiceUnavailable, map[string]string{
+				"error": ErrAllBackendsDown.Error(),
+			})
+		}
 		return ctx.JSON(http.StatusServiceUnavailable, map[string]string{
 			"error": err.Error(),
 		})
@@ -67,6 +79,10 @@ func (b *Balancer) UploadHandler(ctx echo.Context) error {
 	// Execute request
 	resp, err := b.client.Do(req)
 	if err != nil {
+		// Mark backend as dead on timeout or connection errors
+		if isTimeoutOrConnectionError(err) {
+			b.backendManager.MarkBackendDead(backend, err)
+		}
 		return ctx.JSON(http.StatusServiceUnavailable, map[string]string{
 			"error": "Upload failed: " + err.Error(),
 		})
