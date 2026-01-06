@@ -35,6 +35,7 @@ func main() {
 	healthCheckTimeout := flag.Duration("health-check-timeout", defaultHealthCheckTimeout, "Timeout for health check requests")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	debugAddr := flag.String("debug-addr", "localhost:6060", "Debug server address (pprof)")
+	dbPath := flag.String("db", "", "SQLite database path for bucket metadata (enables bucket API)")
 
 	flag.Parse()
 
@@ -75,6 +76,7 @@ func main() {
 		*healthCheckTimeout,
 		*debug,
 		*debugAddr,
+		*dbPath,
 	)
 	if err := bServer.Start(*addr); err != nil {
 		log.Fatal().Err(err).Msg("Server failed to start")

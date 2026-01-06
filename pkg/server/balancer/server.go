@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"loopfs/pkg/bucket"
 	"loopfs/pkg/log"
 
 	"github.com/labstack/echo/v4"
@@ -27,8 +28,10 @@ type Server struct {
 	healthCheckTimeout      time.Duration
 	echo                    *echo.Echo
 	backendManager          *BackendManager
+	bucketStore             *bucket.Store
 	debug                   bool
 	debugAddr               string
+	dbPath                  string
 }
 
 func NewBalancerServer(
@@ -36,7 +39,7 @@ func NewBalancerServer(
 	retryMax int,
 	gracefulShutdownTimeout, retryWaitMin, retryWaitMax, requestTimeout time.Duration,
 	healthCheckInterval, healthCheckTimeout time.Duration,
-	debug bool, debugAddr string,
+	debug bool, debugAddr, dbPath string,
 ) *Server {
 	return &Server{
 		backendURLs:             backendURLs,
@@ -50,6 +53,7 @@ func NewBalancerServer(
 		echo:                    echo.New(),
 		debug:                   debug,
 		debugAddr:               debugAddr,
+		dbPath:                  dbPath,
 	}
 }
 
@@ -57,6 +61,16 @@ func (b *Server) Start(addr string) error {
 	// Create backend manager and start health checks
 	b.backendManager = NewBackendManager(b.backendURLs, b.healthCheckInterval, b.healthCheckTimeout)
 	b.backendManager.Start()
+
+	// Initialize bucket store if database path is provided
+	if b.dbPath != "" {
+		var err error
+		b.bucketStore, err = bucket.NewStore(b.dbPath)
+		if err != nil {
+			return err
+		}
+		log.Info().Str("db_path", b.dbPath).Msg("Bucket store initialized")
+	}
 
 	// Create casBalancer
 	casBalancer := NewBalancer(b.backendManager, b.retryMax, b.retryWaitMin, b.retryWaitMax, b.requestTimeout)
@@ -93,6 +107,13 @@ func (b *Server) Shutdown() error {
 		b.backendManager.Stop()
 	}
 
+	// Close bucket store
+	if b.bucketStore != nil {
+		if err := b.bucketStore.Close(); err != nil {
+			log.Warn().Err(err).Msg("Failed to close bucket store")
+		}
+	}
+
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), b.gracefulShutdownTimeout)
 	defer cancel()
@@ -115,7 +136,7 @@ func (b *Server) setupRoutes(casBalancer *Balancer) {
 	b.echo.Use(middleware.Recover())
 	b.echo.Use(middleware.CORS())
 
-	// Register routes
+	// Register CAS routes (unchanged for backward compatibility)
 	b.echo.POST("/file/upload", casBalancer.UploadHandler)
 	b.echo.GET("/file/:hash/download", casBalancer.DownloadHandler)
 	b.echo.GET("/file/:hash/info", casBalancer.FileInfoHandler)
@@ -129,4 +150,26 @@ func (b *Server) setupRoutes(casBalancer *Balancer) {
 			"online":   b.backendManager.HasOnlineBackends(),
 		})
 	})
+
+	// Register bucket routes (only if bucket store is configured)
+	if b.bucketStore != nil {
+		bucketHandlers := NewBucketHandlers(b.bucketStore)
+		objectHandlers := NewObjectHandlers(b.bucketStore, casBalancer, b.requestTimeout)
+
+		// Bucket management
+		b.echo.POST("/bucket/:name", bucketHandlers.CreateBucketHandler)
+		b.echo.GET("/bucket/:name", bucketHandlers.GetBucketHandler)
+		b.echo.DELETE("/bucket/:name", bucketHandlers.DeleteBucketHandler)
+		b.echo.GET("/buckets", bucketHandlers.ListBucketsHandler)
+
+		// Object operations
+		b.echo.POST("/bucket/:name/upload", objectHandlers.BucketUploadHandler)
+		b.echo.PUT("/bucket/:name/object/*", objectHandlers.PutObjectHandler)
+		b.echo.GET("/bucket/:name/object/*", objectHandlers.GetObjectHandler)
+		b.echo.HEAD("/bucket/:name/object/*", objectHandlers.HeadObjectHandler)
+		b.echo.DELETE("/bucket/:name/object/*", objectHandlers.DeleteObjectHandler)
+		b.echo.GET("/bucket/:name/objects", objectHandlers.ListObjectsHandler)
+
+		log.Info().Msg("Bucket API routes enabled")
+	}
 }

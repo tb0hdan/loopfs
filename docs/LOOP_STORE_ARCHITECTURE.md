@@ -2,8 +2,10 @@
 
 ## Table of Contents
 - [Overview](#overview)
-- [Architecture Diagram](#architecture-diagram)
-- [Core Components](#core-components)
+- [System Architecture](#system-architecture)
+- [CAS Node Architecture](#cas-node-architecture)
+- [Balancer Architecture](#balancer-architecture)
+- [Bucket System](#bucket-system)
 - [Data Flow Diagrams](#data-flow-diagrams)
 - [Hash-Based File Organization](#hash-based-file-organization)
 - [Loop Filesystem Management](#loop-filesystem-management)
@@ -19,8 +21,9 @@
 
 LoopFS implements a unique Content Addressable Storage (CAS) system using Linux loop filesystems as the underlying storage mechanism. Unlike traditional file-based CAS systems that store files directly on disk, LoopFS creates dynamically managed ext4 filesystems in loop files, providing filesystem-level isolation and improved organization.
 
-### Key Innovation: Loop Filesystem Storage
+### Key Innovations
 
+#### 1. Loop Filesystem Storage
 Each group of files (based on hash prefix) is stored in a separate ext4 filesystem contained within a loop file. This approach provides:
 
 - **Filesystem Isolation**: Each loop file is an independent ext4 filesystem
@@ -29,9 +32,65 @@ Each group of files (based on hash prefix) is stored in a separate ext4 filesyst
 - **Scalability**: Distributes I/O load across multiple filesystems
 - **Operational Benefits**: Individual filesystem management and repair capabilities
 
+#### 2. Distributed Balancer with Bucket Support
+The CAS Balancer provides a scalable front-end for multiple CAS nodes with:
+
+- **Load Balancing**: Distributes operations across multiple CAS backends
+- **Bucket Layer**: Multi-tenant file naming on top of content-addressable storage
+- **Deduplication**: Same content stored once, referenced by multiple buckets
+- **SQLite Metadata**: Lightweight embedded database for bucket/object metadata
+
 ---
 
-## Architecture Diagram
+## System Architecture
+
+LoopFS consists of two main components that can be deployed independently or together:
+
+```mermaid
+graph TB
+    subgraph "Client Applications"
+        C1[Direct CAS Client]
+        C2[Bucket API Client]
+    end
+
+    subgraph "Balancer Layer"
+        B[CAS Balancer]
+        DB[(SQLite DB)]
+        B <--> DB
+    end
+
+    subgraph "Storage Layer"
+        N1[CAS Node 1]
+        N2[CAS Node 2]
+        N3[CAS Node N]
+    end
+
+    C1 --> N1
+    C2 --> B
+    B --> N1
+    B --> N2
+    B --> N3
+
+    style B fill:#e1f5fe
+    style DB fill:#fff3e0
+    style N1 fill:#e8f5e8
+    style N2 fill:#e8f5e8
+    style N3 fill:#e8f5e8
+```
+
+### Deployment Modes
+
+| Mode | Components | Use Case |
+|------|------------|----------|
+| **Single Node** | `casd` only | Development, small deployments |
+| **Multi-Node CAS** | Multiple `casd` + direct access | High-capacity pure CAS storage |
+| **Full Stack** | `cas-balancer` + `casd` nodes + SQLite | Production with buckets, multi-tenancy |
+
+---
+
+## CAS Node Architecture
+
+Each CAS node (`casd`) is a standalone content-addressable storage server using loop filesystems:
 
 ```mermaid
 graph TB
@@ -80,6 +139,201 @@ graph TB
     style L fill:#fff3e0
     style M fill:#e8f5e8
 ```
+
+---
+
+## Balancer Architecture
+
+The CAS Balancer (`cas-balancer`) provides load balancing, health checking, and optional bucket functionality:
+
+```mermaid
+graph TB
+    subgraph "Client Layer"
+        A[HTTP Client]
+    end
+
+    subgraph "Balancer Server"
+        A --> B[Echo HTTP Server]
+        B --> C[CAS Handlers]
+        B --> D[Bucket Handlers]
+        B --> E[Object Handlers]
+        B --> F[Backend Status]
+    end
+
+    subgraph "Core Components"
+        C --> G[Balancer Core]
+        D --> H[Bucket Store]
+        E --> H
+        E --> G
+        G --> I[Backend Manager]
+    end
+
+    subgraph "Data Storage"
+        H --> J[(SQLite DB)]
+    end
+
+    subgraph "Backend Pool"
+        I --> K{Health Checker}
+        K --> L[CAS Node 1]
+        K --> M[CAS Node 2]
+        K --> N[CAS Node N]
+    end
+
+    style G fill:#e1f5fe
+    style H fill:#fff3e0
+    style I fill:#e8f5e8
+    style J fill:#f3e5f5
+```
+
+### Balancer Components
+
+| Component | File | Responsibility |
+|-----------|------|----------------|
+| **Server** | `server.go` | HTTP server setup, route configuration, lifecycle |
+| **Balancer** | `balancer.go` | Request forwarding, retry logic, response handling |
+| **Backend Manager** | `backend.go` | Backend health checks, online/offline tracking |
+| **Bucket Handlers** | `bucket.go` | Bucket CRUD operations |
+| **Object Handlers** | `bucket_object.go` | Object upload/download/list operations |
+
+### Backend Selection Strategy
+
+```mermaid
+flowchart TD
+    A[Incoming Request] --> B{Operation Type?}
+    B -->|Upload| C[GetBackendForUpload]
+    B -->|Download/Info| D[GetOnlineBackends]
+
+    C --> E[Check Available Space]
+    E --> F[Select Backend with Most Space]
+
+    D --> G[Parallel Requests to All]
+    G --> H[Return First Success]
+
+    F --> I[Forward Request]
+    H --> I
+
+    I --> J{Success?}
+    J -->|Yes| K[Return Response]
+    J -->|No| L[Mark Backend Dead]
+    L --> M[Retry with Another]
+```
+
+---
+
+## Bucket System
+
+The bucket system provides a file naming layer on top of content-addressable storage.
+
+### Database Schema
+
+```mermaid
+erDiagram
+    BUCKETS ||--o{ OBJECTS : contains
+
+    BUCKETS {
+        int id PK
+        string name UK
+        string owner_id
+        datetime created_at
+        datetime updated_at
+        boolean is_public
+        int quota_bytes
+    }
+
+    OBJECTS {
+        int id PK
+        int bucket_id FK
+        string key
+        string hash
+        int size
+        string content_type
+        text metadata
+        datetime created_at
+        datetime updated_at
+    }
+```
+
+### Bucket Store Implementation (`pkg/bucket/store.go`)
+
+```go
+type Store struct {
+    db *sql.DB
+    mu sync.RWMutex
+}
+
+// Key operations
+func (s *Store) CreateBucket(name, ownerID string, opts *BucketOptions) (*models.Bucket, error)
+func (s *Store) GetBucket(name string) (*models.Bucket, error)
+func (s *Store) DeleteBucket(name string) error
+func (s *Store) ListBuckets(ownerID string) ([]models.Bucket, error)
+func (s *Store) PutObject(bucketName, key, hash string, size int64, contentType string, metadata map[string]string) (*models.BucketObject, error)
+func (s *Store) GetObject(bucketName, key string) (*models.BucketObject, error)
+func (s *Store) DeleteObject(bucketName, key string) error
+func (s *Store) ListObjects(bucketName string, opts *ListOptions) (*models.ObjectListResponse, error)
+func (s *Store) CheckAccess(bucketName, userID string) error
+```
+
+### Deduplication Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as Balancer
+    participant DB as SQLite
+    participant CAS as CAS Node
+
+    Note over C,CAS: Upload same file to two buckets
+
+    C->>B: POST /bucket/bucket-a/upload (file.txt)
+    B->>CAS: POST /file/upload
+    CAS-->>B: {hash: "abc123..."}
+    B->>DB: INSERT object (bucket-a, key, hash)
+    B-->>C: {hash, key, bucket: "bucket-a"}
+
+    C->>B: POST /bucket/bucket-b/upload (file.txt)
+    B->>CAS: POST /file/upload
+    CAS-->>B: 409 Conflict {hash: "abc123..."}
+    Note over B: File already exists - deduplication!
+    B->>DB: INSERT object (bucket-b, key, hash)
+    B-->>C: {hash, key, bucket: "bucket-b"}
+
+    Note over DB: Two object records, same hash
+    Note over CAS: One file stored
+```
+
+### Multi-Tenancy Model
+
+```mermaid
+graph LR
+    subgraph "Owner: user-1"
+        B1[bucket-alpha]
+        B2[bucket-beta]
+    end
+
+    subgraph "Owner: user-2"
+        B3[bucket-gamma]
+    end
+
+    subgraph "CAS Storage"
+        H1[hash-aaa...]
+        H2[hash-bbb...]
+        H3[hash-ccc...]
+    end
+
+    B1 --> H1
+    B1 --> H2
+    B2 --> H2
+    B3 --> H2
+    B3 --> H3
+
+    style H2 fill:#ffeb3b
+```
+
+**Access Control:**
+- Owner ID extracted from `X-Owner-ID` header
+- Bucket owners have full read/write access
+- Public buckets (`is_public=true`) allow read access to all
+- Private buckets restrict access to owner only
 
 ---
 
@@ -283,6 +537,105 @@ stateDiagram-v2
         - Reduces mount/unmount overhead
         - Automatic cleanup of idle filesystems
     end note
+```
+
+### Bucket Upload Flow (Balancer)
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as Balancer
+    participant DB as SQLite
+    participant CAS as CAS Node
+
+    C->>B: POST /bucket/{name}/upload
+    Note over B: Extract X-Owner-ID header
+
+    B->>DB: GetBucket(name)
+    alt Bucket not found
+        B-->>C: 404 Not Found
+    else Bucket found
+        B->>DB: Check owner access
+        alt Access denied
+            B-->>C: 403 Forbidden
+        else Access granted
+            B->>B: GetBackendForUpload()
+            B->>CAS: POST /file/upload (multipart)
+
+            alt Upload success
+                CAS-->>B: 200 {hash}
+            else File exists
+                CAS-->>B: 409 {hash}
+            end
+
+            B->>DB: PutObject(bucket, key, hash, size)
+            B-->>C: 200 {hash, key, bucket, size}
+        end
+    end
+```
+
+### Bucket Download Flow (Balancer)
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as Balancer
+    participant DB as SQLite
+    participant CAS1 as CAS Node 1
+    participant CAS2 as CAS Node 2
+
+    C->>B: GET /bucket/{name}/object/{key}
+
+    B->>DB: GetObject(bucket, key)
+    alt Object not found
+        B-->>C: 404 Not Found
+    else Object found
+        B->>DB: CheckAccess(bucket, ownerID)
+        alt Access denied
+            B-->>C: 403 Forbidden
+        else Access granted
+            Note over B: Parallel download requests
+            par Request to CAS Node 1
+                B->>CAS1: GET /file/{hash}/download
+            and Request to CAS Node 2
+                B->>CAS2: GET /file/{hash}/download
+            end
+
+            alt CAS1 responds first with success
+                CAS1-->>B: 200 + File Stream
+                B-->>C: 200 + File Stream
+            else CAS2 responds first with success
+                CAS2-->>B: 200 + File Stream
+                B-->>C: 200 + File Stream
+            else All fail
+                B-->>C: 404 Not Found
+            end
+        end
+    end
+```
+
+### Object Listing Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant B as Balancer
+    participant DB as SQLite
+
+    C->>B: GET /bucket/{name}/objects?prefix=folder/&max-keys=100
+
+    B->>DB: CheckAccess(bucket, ownerID)
+    alt Access denied
+        B-->>C: 403 Forbidden
+    else Access granted
+        B->>DB: ListObjects(bucket, {prefix, maxKeys, cursor})
+        DB-->>B: Objects + NextCursor + IsTruncated
+
+        Note over B: Extract common prefixes if delimiter set
+        B->>B: extractCommonPrefixes()
+
+        B-->>C: 200 {objects, prefix, next_cursor, is_truncated, common_prefixes}
+    end
 ```
 
 ---
@@ -803,7 +1156,7 @@ log.Debug().
 
 ### Access Control
 
-#### File System Permissions
+#### CAS Node: File System Permissions
 ```bash
 # Directory structure permissions
 drwxr-x--- root:root /data/cas/          # 0750
@@ -813,11 +1166,53 @@ drwxr-x--- root:root /data/cas/ab/cd/    # 0750
 drwxr-x--- root:root loopmount/          # 0750 (mount point)
 ```
 
-#### Privilege Requirements
+#### CAS Node: Privilege Requirements
 - **Root Access Required**: Loop mounting requires CAP_SYS_ADMIN
 - **Loop Device Access**: Must have access to /dev/loop* devices
 - **Mount Privileges**: Requires mount/umount capabilities
 - **File Creation**: Must be able to create files in storage directory
+
+#### Balancer: Multi-Tenancy Access Control
+
+```mermaid
+flowchart TD
+    A[Incoming Request] --> B{Has X-Owner-ID?}
+    B -->|No| C[Use default owner]
+    B -->|Yes| D[Extract Owner ID]
+    C --> E[Bucket Operation]
+    D --> E
+
+    E --> F{Operation Type?}
+    F -->|Read| G{Bucket Public?}
+    F -->|Write/Delete| H{Is Owner?}
+
+    G -->|Yes| I[Allow Access]
+    G -->|No| H
+
+    H -->|Yes| I
+    H -->|No| J[403 Forbidden]
+
+    style I fill:#c8e6c9
+    style J fill:#ffcdd2
+```
+
+**Bucket Access Rules:**
+
+| Operation | Owner Access | Public Bucket (Non-owner) | Private Bucket (Non-owner) |
+|-----------|--------------|---------------------------|----------------------------|
+| Create Bucket | ✅ | N/A | N/A |
+| Get Bucket | ✅ | ✅ | ❌ |
+| Delete Bucket | ✅ | ❌ | ❌ |
+| Upload Object | ✅ | ❌ | ❌ |
+| Download Object | ✅ | ✅ | ❌ |
+| Delete Object | ✅ | ❌ | ❌ |
+| List Objects | ✅ | ✅ | ❌ |
+
+**Bucket Name Validation:**
+```go
+// Valid bucket names: 3-63 chars, lowercase alphanumeric with hyphens
+var bucketNamePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$|^[a-z0-9]{3}$`)
+```
 
 ### Input Validation and Sanitization
 
@@ -881,4 +1276,54 @@ cmd := exec.CommandContext(ctx, "dd", "if=/dev/zero",
 
 ---
 
-This comprehensive documentation provides a complete understanding of LoopFS's innovative loop store architecture, enabling effective deployment, maintenance, and further development of the system.
+## Appendix: Command Reference
+
+### CAS Node (`casd`)
+```bash
+# Basic usage
+sudo ./build/casd -storage /data/cas -addr :8080
+
+# Full options
+sudo ./build/casd \
+    -storage /data/cas \      # Storage directory
+    -addr :8080 \             # Listen address
+    -web ./web \              # Web assets directory
+    -loop-size 1024 \         # Loop file size in MB
+    -mount-ttl 5m             # Mount idle timeout
+```
+
+### CAS Balancer (`cas-balancer`)
+```bash
+# Basic usage (without buckets)
+./build/cas-balancer -backends http://cas1:8080,http://cas2:8080
+
+# With bucket support
+./build/cas-balancer \
+    -backends http://cas1:8080,http://cas2:8080 \
+    -db /var/lib/loopfs/buckets.db \    # SQLite database path
+    -addr :8080                          # Listen address
+```
+
+### API Endpoints Summary
+
+| Endpoint | Method | Component | Description |
+|----------|--------|-----------|-------------|
+| `/file/upload` | POST | CAS/Balancer | Upload file, returns hash |
+| `/file/{hash}/download` | GET | CAS/Balancer | Download file by hash |
+| `/file/{hash}/info` | GET | CAS/Balancer | Get file metadata |
+| `/file/{hash}/delete` | DELETE | CAS/Balancer | Delete file |
+| `/bucket/{name}` | POST | Balancer | Create bucket |
+| `/bucket/{name}` | GET | Balancer | Get bucket info |
+| `/bucket/{name}` | DELETE | Balancer | Delete bucket |
+| `/buckets` | GET | Balancer | List buckets |
+| `/bucket/{name}/upload` | POST | Balancer | Upload object to bucket |
+| `/bucket/{name}/object/*` | GET | Balancer | Download object |
+| `/bucket/{name}/object/*` | PUT | Balancer | Upload at specific key |
+| `/bucket/{name}/object/*` | HEAD | Balancer | Get object metadata |
+| `/bucket/{name}/object/*` | DELETE | Balancer | Delete object reference |
+| `/bucket/{name}/objects` | GET | Balancer | List objects |
+| `/backends/status` | GET | Balancer | Backend health status |
+
+---
+
+This comprehensive documentation provides a complete understanding of LoopFS's architecture, including both the innovative loop store mechanism and the multi-tenant bucket system, enabling effective deployment, maintenance, and further development of the system.

@@ -11,6 +11,8 @@ tags:
     description: Core CAS storage server operations
   - name: casd-balancer
     description: Load balancer for CAS storage operations
+  - name: bucket
+    description: Bucket and object management operations (balancer only, requires -db flag)
 paths:
   /node/info:
     get:
@@ -337,6 +339,585 @@ paths:
                   error:
                     type: string
                     example: "Internal server error"
+  /buckets:
+    get:
+      tags:
+        - bucket
+      summary: List buckets for authenticated user
+      description: Returns all buckets owned by the authenticated user
+      parameters:
+        - name: X-Owner-ID
+          in: header
+          required: false
+          description: Owner ID for multi-tenancy (defaults to "default" if not provided)
+          schema:
+            type: string
+            example: "user123"
+      responses:
+        '200':
+          description: List of buckets
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BucketListResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /bucket/{name}:
+    post:
+      tags:
+        - bucket
+      summary: Create a new bucket
+      description: Creates a new bucket with the specified name
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Bucket name (3-63 characters, lowercase alphanumeric with hyphens)
+          schema:
+            type: string
+            pattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+            example: "my-bucket"
+        - name: X-Owner-ID
+          in: header
+          required: false
+          description: Owner ID for multi-tenancy (defaults to "default" if not provided)
+          schema:
+            type: string
+            example: "user123"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                is_public:
+                  type: boolean
+                  description: Whether the bucket is publicly readable
+                  default: false
+                quota_bytes:
+                  type: integer
+                  description: Storage quota in bytes (0 = unlimited)
+                  default: 0
+      responses:
+        '201':
+          description: Bucket created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bucket'
+        '400':
+          description: Invalid bucket name
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Bucket already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    get:
+      tags:
+        - bucket
+      summary: Get bucket information
+      description: Returns information about the specified bucket
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Bucket name
+          schema:
+            type: string
+            example: "my-bucket"
+        - name: X-Owner-ID
+          in: header
+          required: false
+          description: Owner ID for multi-tenancy
+          schema:
+            type: string
+            example: "user123"
+      responses:
+        '200':
+          description: Bucket information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Bucket'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bucket not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    delete:
+      tags:
+        - bucket
+      summary: Delete a bucket
+      description: Deletes an empty bucket. Only the bucket owner can delete it.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Bucket name
+          schema:
+            type: string
+            example: "my-bucket"
+        - name: X-Owner-ID
+          in: header
+          required: false
+          description: Owner ID for multi-tenancy
+          schema:
+            type: string
+            example: "user123"
+      responses:
+        '200':
+          description: Bucket deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Bucket deleted successfully"
+                  bucket:
+                    type: string
+                    example: "my-bucket"
+        '403':
+          description: Access denied - only owner can delete bucket
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bucket not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Bucket is not empty
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /bucket/{name}/upload:
+    post:
+      tags:
+        - bucket
+      summary: Upload a file to a bucket
+      description: Uploads a file to the bucket. The object key can be specified or defaults to the filename.
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Bucket name
+          schema:
+            type: string
+            example: "my-bucket"
+        - name: X-Owner-ID
+          in: header
+          required: false
+          description: Owner ID for multi-tenancy
+          schema:
+            type: string
+            example: "user123"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The file to upload
+                key:
+                  type: string
+                  description: Object key (defaults to filename if not provided)
+                  example: "folder/myfile.txt"
+              required:
+                - file
+      responses:
+        '200':
+          description: File uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BucketUploadResponse'
+        '400':
+          description: No file provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bucket not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /bucket/{name}/objects:
+    get:
+      tags:
+        - bucket
+      summary: List objects in a bucket
+      description: Returns a paginated list of objects in the bucket with optional prefix filtering
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Bucket name
+          schema:
+            type: string
+            example: "my-bucket"
+        - name: X-Owner-ID
+          in: header
+          required: false
+          description: Owner ID for multi-tenancy
+          schema:
+            type: string
+            example: "user123"
+        - name: prefix
+          in: query
+          required: false
+          description: Filter objects by key prefix
+          schema:
+            type: string
+            example: "folder/"
+        - name: delimiter
+          in: query
+          required: false
+          description: Delimiter for grouping keys (e.g., "/" for folder-like listing)
+          schema:
+            type: string
+            example: "/"
+        - name: cursor
+          in: query
+          required: false
+          description: Pagination cursor from previous response
+          schema:
+            type: string
+        - name: max-keys
+          in: query
+          required: false
+          description: Maximum number of keys to return (default 1000)
+          schema:
+            type: integer
+            default: 1000
+            maximum: 1000
+      responses:
+        '200':
+          description: List of objects
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObjectListResponse'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bucket not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /bucket/{name}/object/{key}:
+    get:
+      tags:
+        - bucket
+      summary: Download an object from a bucket
+      description: Downloads an object by its key from the specified bucket
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Bucket name
+          schema:
+            type: string
+            example: "my-bucket"
+        - name: key
+          in: path
+          required: true
+          description: Object key (supports nested paths like folder/subfolder/file.txt)
+          schema:
+            type: string
+            example: "folder/myfile.txt"
+        - name: X-Owner-ID
+          in: header
+          required: false
+          description: Owner ID for multi-tenancy
+          schema:
+            type: string
+            example: "user123"
+      responses:
+        '200':
+          description: Object content
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bucket or object not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    put:
+      tags:
+        - bucket
+      summary: Upload an object at a specific key
+      description: Uploads a file to the bucket at the specified key path
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Bucket name
+          schema:
+            type: string
+            example: "my-bucket"
+        - name: key
+          in: path
+          required: true
+          description: Object key (supports nested paths)
+          schema:
+            type: string
+            example: "folder/myfile.txt"
+        - name: X-Owner-ID
+          in: header
+          required: false
+          description: Owner ID for multi-tenancy
+          schema:
+            type: string
+            example: "user123"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: The file to upload
+              required:
+                - file
+      responses:
+        '200':
+          description: Object uploaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BucketUploadResponse'
+        '400':
+          description: No file provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bucket not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    head:
+      tags:
+        - bucket
+      summary: Get object metadata
+      description: Returns metadata about an object without downloading its content
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Bucket name
+          schema:
+            type: string
+            example: "my-bucket"
+        - name: key
+          in: path
+          required: true
+          description: Object key
+          schema:
+            type: string
+            example: "folder/myfile.txt"
+        - name: X-Owner-ID
+          in: header
+          required: false
+          description: Owner ID for multi-tenancy
+          schema:
+            type: string
+            example: "user123"
+      responses:
+        '200':
+          description: Object metadata in response headers
+          headers:
+            X-Object-Hash:
+              description: SHA256 hash of the object content
+              schema:
+                type: string
+            X-Object-Size:
+              description: Object size in bytes
+              schema:
+                type: integer
+            X-Object-Key:
+              description: Object key
+              schema:
+                type: string
+            Last-Modified:
+              description: Last modification time
+              schema:
+                type: string
+            Content-Type:
+              description: Content type of the object
+              schema:
+                type: string
+        '403':
+          description: Access denied
+        '404':
+          description: Bucket or object not found
+        '500':
+          description: Internal server error
+    delete:
+      tags:
+        - bucket
+      summary: Delete an object from a bucket
+      description: Deletes an object reference from the bucket. The underlying CAS content is not deleted (deduplication).
+      parameters:
+        - name: name
+          in: path
+          required: true
+          description: Bucket name
+          schema:
+            type: string
+            example: "my-bucket"
+        - name: key
+          in: path
+          required: true
+          description: Object key
+          schema:
+            type: string
+            example: "folder/myfile.txt"
+        - name: X-Owner-ID
+          in: header
+          required: false
+          description: Owner ID for multi-tenancy
+          schema:
+            type: string
+            example: "user123"
+      responses:
+        '200':
+          description: Object deleted successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Object deleted successfully"
+                  bucket:
+                    type: string
+                    example: "my-bucket"
+                  key:
+                    type: string
+                    example: "folder/myfile.txt"
+        '403':
+          description: Access denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Bucket or object not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 components:
   schemas:
     Error:
@@ -418,3 +999,120 @@ components:
         available:
           type: integer
           description: Available storage space in bytes
+    Bucket:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Unique bucket ID
+          example: 1
+        name:
+          type: string
+          description: Bucket name
+          example: "my-bucket"
+        owner_id:
+          type: string
+          description: Owner identifier
+          example: "user123"
+        created_at:
+          type: string
+          format: date-time
+          description: Bucket creation time
+          example: "2025-11-15T12:00:00Z"
+        is_public:
+          type: boolean
+          description: Whether the bucket is publicly readable
+          example: false
+        quota_bytes:
+          type: integer
+          description: Storage quota in bytes (0 = unlimited)
+          example: 0
+    BucketObject:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Unique object ID
+          example: 1
+        bucket_id:
+          type: integer
+          description: Parent bucket ID
+          example: 1
+        key:
+          type: string
+          description: Object key (path)
+          example: "folder/myfile.txt"
+        hash:
+          type: string
+          description: SHA256 hash of the object content
+          example: "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+        size:
+          type: integer
+          description: Object size in bytes
+          example: 1024
+        content_type:
+          type: string
+          description: MIME content type
+          example: "application/octet-stream"
+        metadata:
+          type: object
+          description: Custom metadata (JSON)
+          additionalProperties:
+            type: string
+        created_at:
+          type: string
+          format: date-time
+          description: Object creation time
+          example: "2025-11-15T12:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Object last update time
+          example: "2025-11-15T12:00:00Z"
+    BucketListResponse:
+      type: object
+      properties:
+        buckets:
+          type: array
+          description: List of buckets
+          items:
+            $ref: '#/components/schemas/Bucket'
+    ObjectListResponse:
+      type: object
+      properties:
+        objects:
+          type: array
+          description: List of objects
+          items:
+            $ref: '#/components/schemas/BucketObject'
+        prefix:
+          type: string
+          description: Prefix filter used
+          example: "folder/"
+        next_cursor:
+          type: string
+          description: Cursor for next page (empty if no more results)
+          example: ""
+        is_truncated:
+          type: boolean
+          description: Whether there are more results
+          example: false
+    BucketUploadResponse:
+      type: object
+      properties:
+        hash:
+          type: string
+          description: SHA256 hash of the uploaded content
+          example: "a1fff0ffefb9eace7230c24e50731f0a91c62f9cefdfe77121c2f607125dffae"
+        key:
+          type: string
+          description: Object key
+          example: "folder/myfile.txt"
+        bucket:
+          type: string
+          description: Bucket name
+          example: "my-bucket"
+        size:
+          type: integer
+          description: Object size in bytes
+          example: 1024

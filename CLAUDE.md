@@ -6,6 +6,7 @@
 - Always keep Swagger documentation up to date with any API changes.
 - Always add a new line to the end of each file you modify.
 - Always follow Effective Go guidelines for code style and conventions.
+- Always group the consecutive var declarations, sorting them alphabetically within each group.
 - Always use stretchr suite when writing tests.
 - Do not create tests for cmd/ directory files.
 

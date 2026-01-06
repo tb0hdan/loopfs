@@ -48,6 +48,7 @@ func (s *ServerTestSuite) SetupTest() {
 		5*time.Second,        // healthCheckTimeout
 		false,
 		"",
+		"",
 	)
 }
 
@@ -63,7 +64,7 @@ func (s *ServerTestSuite) TestNewBalancerServer() {
 	healthCheckTimeout := 5 * time.Second
 
 	server := NewBalancerServer(backendList, retryMax, gracefulShutdownTimeout, retryWaitMin, retryWaitMax,
-		requestTimeout, healthCheckInterval, healthCheckTimeout, false, "")
+		requestTimeout, healthCheckInterval, healthCheckTimeout, false, "", "")
 
 	s.NotNil(server)
 	s.Equal(backendList, server.backendURLs)
@@ -90,6 +91,7 @@ func (s *ServerTestSuite) TestServerDefaultSettings() {
 		5*time.Second,
 		5*time.Second,
 		false,
+		"",
 		"",
 	)
 
@@ -243,6 +245,7 @@ func (s *ServerTestSuite) TestServerConfiguration() {
 				tc.healthCheckTimeout,
 				false,
 				"",
+				"",
 			)
 
 			s.Equal(tc.backendList, server.backendURLs)
@@ -270,6 +273,7 @@ func (s *ServerTestSuite) TestServerWithInvalidBackends() {
 		5*time.Second,
 		5*time.Second,
 		false,
+		"",
 		"",
 	)
 
@@ -357,6 +361,7 @@ func (s *ServerTestSuite) TestServerZeroTimeouts() {
 		0, // zero health check interval
 		0, // zero health check timeout
 		false,
+		"",
 		"",
 	)
 
