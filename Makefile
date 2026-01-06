@@ -1,5 +1,5 @@
 .PHONY: build
-LINTER_VERSION ?= v2.6.1
+LINTER_VERSION ?= v2.7.2
 
 all: lint test build
 
