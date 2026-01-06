@@ -13,7 +13,7 @@ lint:
 
 test: build-dir
 	@echo "Running tests..."
-	@go test -v ./... -coverprofile=build/coverage.out
+	@go test -race -v ./... -coverprofile=build/coverage.out
 	@go tool cover -html=build/coverage.out -o build/coverage.html
 
 build: casd cas-test cas-balancer

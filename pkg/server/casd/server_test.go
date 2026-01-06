@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 
 // MockStore implements the store.Store interface for testing
 type MockStore struct {
+	mu            sync.RWMutex
 	files         map[string][]byte
 	fileInfo      map[string]*models.FileInfo
 	uploadResults map[string]*models.UploadResponse
@@ -39,28 +41,40 @@ func NewMockStore() *MockStore {
 
 // Upload implementation for mock store
 func (m *MockStore) Upload(reader io.Reader, filename string) (*models.UploadResponse, error) {
-	if m.shouldError && m.errorType == "upload" {
+	m.mu.RLock()
+	shouldError := m.shouldError
+	errorType := m.errorType
+	m.mu.RUnlock()
+
+	if shouldError && errorType == "upload" {
 		return nil, store.FileExistsError{Hash: "existing"}
 	}
 
 	data, _ := io.ReadAll(reader)
 	hash := "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 
+	m.mu.Lock()
 	m.files[hash] = data
 	m.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      int64(len(data)),
 		CreatedAt: time.Now(),
 	}
-
 	result := &models.UploadResponse{Hash: hash}
 	m.uploadResults[hash] = result
+	m.mu.Unlock()
+
 	return result, nil
 }
 
 // UploadWithHash implementation for mock store
 func (m *MockStore) UploadWithHash(tempFilePath, hash, filename string) (*models.UploadResponse, error) {
-	if m.shouldError && m.errorType == "upload" {
+	m.mu.RLock()
+	shouldError := m.shouldError
+	errorType := m.errorType
+	m.mu.RUnlock()
+
+	if shouldError && errorType == "upload" {
 		return nil, store.FileExistsError{Hash: "existing"}
 	}
 
@@ -70,21 +84,28 @@ func (m *MockStore) UploadWithHash(tempFilePath, hash, filename string) (*models
 		return nil, err
 	}
 
+	m.mu.Lock()
 	m.files[hash] = data
 	m.fileInfo[hash] = &models.FileInfo{
 		Hash:      hash,
 		Size:      int64(len(data)),
 		CreatedAt: time.Now(),
 	}
-
 	result := &models.UploadResponse{Hash: hash}
 	m.uploadResults[hash] = result
+	m.mu.Unlock()
+
 	return result, nil
 }
 
 // DownloadStream implementation for mock store
 func (m *MockStore) DownloadStream(hash string) (io.ReadCloser, error) {
-	if m.shouldError && m.errorType == "download" {
+	m.mu.RLock()
+	shouldError := m.shouldError
+	errorType := m.errorType
+	m.mu.RUnlock()
+
+	if shouldError && errorType == "download" {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
 
@@ -93,7 +114,10 @@ func (m *MockStore) DownloadStream(hash string) (io.ReadCloser, error) {
 		return nil, store.InvalidHashError{Hash: hash}
 	}
 
+	m.mu.RLock()
 	data, exists := m.files[hash]
+	m.mu.RUnlock()
+
 	if !exists {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
@@ -104,7 +128,12 @@ func (m *MockStore) DownloadStream(hash string) (io.ReadCloser, error) {
 
 // GetFileInfo implementation for mock store
 func (m *MockStore) GetFileInfo(hash string) (*models.FileInfo, error) {
-	if m.shouldError && m.errorType == "fileinfo" {
+	m.mu.RLock()
+	shouldError := m.shouldError
+	errorType := m.errorType
+	m.mu.RUnlock()
+
+	if shouldError && errorType == "fileinfo" {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
 
@@ -113,7 +142,10 @@ func (m *MockStore) GetFileInfo(hash string) (*models.FileInfo, error) {
 		return nil, store.InvalidHashError{Hash: hash}
 	}
 
+	m.mu.RLock()
 	info, exists := m.fileInfo[hash]
+	m.mu.RUnlock()
+
 	if !exists {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
@@ -128,7 +160,10 @@ func (m *MockStore) Exists(hash string) (bool, error) {
 		return false, store.InvalidHashError{Hash: hash}
 	}
 
+	m.mu.RLock()
 	_, exists := m.files[hash]
+	m.mu.RUnlock()
+
 	return exists, nil
 }
 
@@ -149,7 +184,12 @@ func (m *MockStore) ValidateHash(hash string) bool {
 
 // Delete implementation for mock store
 func (m *MockStore) Delete(hash string) error {
-	if m.shouldError && m.errorType == "delete" {
+	m.mu.RLock()
+	shouldError := m.shouldError
+	errorType := m.errorType
+	m.mu.RUnlock()
+
+	if shouldError && errorType == "delete" {
 		return store.FileNotFoundError{Hash: hash}
 	}
 
@@ -157,6 +197,9 @@ func (m *MockStore) Delete(hash string) error {
 	if !m.ValidateHash(hash) {
 		return store.InvalidHashError{Hash: hash}
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if _, exists := m.files[hash]; !exists {
 		return store.FileNotFoundError{Hash: hash}
@@ -170,7 +213,12 @@ func (m *MockStore) Delete(hash string) error {
 
 // GetDiskUsage implementation for mock store
 func (m *MockStore) GetDiskUsage(hash string) (*models.DiskUsage, error) {
-	if m.shouldError && m.errorType == "diskusage" {
+	m.mu.RLock()
+	shouldError := m.shouldError
+	errorType := m.errorType
+	m.mu.RUnlock()
+
+	if shouldError && errorType == "diskusage" {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
 
@@ -179,7 +227,11 @@ func (m *MockStore) GetDiskUsage(hash string) (*models.DiskUsage, error) {
 		return nil, store.InvalidHashError{Hash: hash}
 	}
 
-	if _, exists := m.files[hash]; !exists {
+	m.mu.RLock()
+	_, exists := m.files[hash]
+	m.mu.RUnlock()
+
+	if !exists {
 		return nil, store.FileNotFoundError{Hash: hash}
 	}
 

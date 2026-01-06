@@ -3,17 +3,42 @@ package log
 import (
 	"bytes"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/suite"
 )
 
+// syncBuffer is a thread-safe wrapper around bytes.Buffer
+type syncBuffer struct {
+	buf bytes.Buffer
+	mu  sync.Mutex
+}
+
+func (s *syncBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
+}
+
+func (s *syncBuffer) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.buf.Reset()
+}
+
 // LoggerTestSuite tests the log package
 type LoggerTestSuite struct {
 	suite.Suite
 	originalLogger zerolog.Logger
-	testOutput     *bytes.Buffer
+	testOutput     *syncBuffer
 }
 
 // SetupTest runs before each test
@@ -21,8 +46,8 @@ func (s *LoggerTestSuite) SetupTest() {
 	// Save the original logger
 	s.originalLogger = Logger
 
-	// Create a test output buffer
-	s.testOutput = &bytes.Buffer{}
+	// Create a thread-safe test output buffer
+	s.testOutput = &syncBuffer{}
 
 	// Configure a test logger that writes to our buffer
 	testLogger := zerolog.New(s.testOutput).
