@@ -6,11 +6,41 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"loopfs/pkg/log"
 	"loopfs/pkg/models"
 	"loopfs/pkg/store"
 )
+
+const (
+	// copyBufferSize is optimized for ext4 filesystem operations.
+	// 256KB aligns well with ext4 block groups and reduces syscalls.
+	copyBufferSize = 256 * 1024
+)
+
+// copyBufferPool is a pool of reusable buffers for io.CopyBuffer operations.
+// Using a pool avoids allocation overhead on the hot path.
+var copyBufferPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, copyBufferSize)
+		return &buf
+	},
+}
+
+// copyWithBuffer copies from src to dst using a pooled buffer.
+// This is more efficient than io.Copy's default 32KB buffer for large files.
+func copyWithBuffer(dst io.Writer, src io.Reader) error {
+	bufPtr, ok := copyBufferPool.Get().(*[]byte)
+	if !ok {
+		// Fallback to a new buffer if type assertion fails
+		buf := make([]byte, copyBufferSize)
+		bufPtr = &buf
+	}
+	defer copyBufferPool.Put(bufPtr)
+	_, err := io.CopyBuffer(dst, src, *bufPtr)
+	return err
+}
 
 // Upload stores a file from the given reader and returns its hash.
 func (s *Store) Upload(reader io.Reader, filename string) (*models.UploadResponse, error) {
@@ -53,7 +83,7 @@ func (s *Store) processAndHashFile(reader io.Reader) (string, *os.File, error) {
 	}
 
 	writer := io.MultiWriter(hasher, tempFile)
-	if _, err := io.Copy(writer, reader); err != nil {
+	if err := copyWithBuffer(writer, reader); err != nil {
 		log.Error().Err(err).Msg("Failed to process file")
 		s.cleanupTempFile(tempFile)
 		return "", nil, err
@@ -140,6 +170,33 @@ func (s *Store) existsWithinMountedLoop(hash string) (bool, error) {
 	return true, nil
 }
 
+// copyAndSyncFile copies from src to dst, syncs if configured, and cleans up on error.
+// This helper reduces cyclomatic complexity in the save functions.
+func (s *Store) copyAndSyncFile(dst *os.File, src io.Reader, targetPath string) error {
+	if err := copyWithBuffer(dst, src); err != nil {
+		s.removeFileOnError(targetPath, "copy")
+		log.Error().Err(err).Str("target_path", targetPath).Msg("Failed to save file")
+		return err
+	}
+
+	if s.syncOnWrite {
+		if err := dst.Sync(); err != nil {
+			log.Error().Err(err).Str("target_path", targetPath).Msg("Failed to sync file to disk")
+			s.removeFileOnError(targetPath, "sync")
+			return err
+		}
+	}
+
+	return nil
+}
+
+// removeFileOnError removes a file when an error occurs during copy/sync operations.
+func (s *Store) removeFileOnError(targetPath, operation string) {
+	if err := os.Remove(targetPath); err != nil {
+		log.Error().Err(err).Str("target_path", targetPath).Str("operation", operation).Msg("Failed to remove target file after error")
+	}
+}
+
 // saveFileWithinMountedLoop saves a temp file to an already-mounted loop filesystem.
 // This assumes the loop filesystem for the hash is already mounted.
 func (s *Store) saveFileWithinMountedLoop(hash string, tempFile *os.File) error {
@@ -174,15 +231,7 @@ func (s *Store) saveFileWithinMountedLoop(hash string, tempFile *os.File) error 
 		}
 	}()
 
-	if _, err := io.Copy(dst, tempFile); err != nil {
-		if err := os.Remove(targetPath); err != nil {
-			log.Error().Err(err).Str("target_path", targetPath).Msg("Failed to remove target file after copy error")
-		}
-		log.Error().Err(err).Str("target_path", targetPath).Msg("Failed to save file")
-		return err
-	}
-
-	return nil
+	return s.copyAndSyncFile(dst, tempFile, targetPath)
 }
 
 // saveFileFromPathWithinMountedLoop saves a file from a given path to an already-mounted loop filesystem.
@@ -225,15 +274,7 @@ func (s *Store) saveFileFromPathWithinMountedLoop(hash string, sourcePath string
 		}
 	}()
 
-	if _, err := io.Copy(dst, src); err != nil {
-		if err := os.Remove(targetPath); err != nil {
-			log.Error().Err(err).Str("target_path", targetPath).Msg("Failed to remove target file after copy error")
-		}
-		log.Error().Err(err).Str("target_path", targetPath).Msg("Failed to save file")
-		return err
-	}
-
-	return nil
+	return s.copyAndSyncFile(dst, src, targetPath)
 }
 
 // UploadWithHash stores a file using a pre-calculated hash and temp file path.

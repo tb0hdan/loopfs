@@ -5,15 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"time"
 
 	"loopfs/pkg/log"
 )
 
 const (
 	// Constants for resize operations.
-	bytesPerMB                = 1024 * 1024
-	quiescenceCheckIntervalMS = 10 // Milliseconds between reference count checks
+	bytesPerMB = 1024 * 1024
 )
 
 // createNewLoopFile creates and formats a new loop file.
@@ -288,16 +286,15 @@ func (s *Store) performResizeOperations(hash, mountPoint, loopFilePath, newLoopF
 
 // waitForQuiescence waits for all active operations on a mount point to complete.
 // This is critical for resize safety - we must wait for ref count to reach zero.
+// Uses sync.Cond for efficient waiting instead of polling.
 func (s *Store) waitForQuiescence(mountPoint string) {
-	for {
-		refCount := s.getCurrentRefCount(mountPoint)
-		if refCount == 0 {
-			break
-		}
-		log.Debug().Str("mount_point", mountPoint).Int("ref_count", refCount).
+	s.quiescenceMutex.Lock()
+	defer s.quiescenceMutex.Unlock()
+
+	for s.getCurrentRefCount(mountPoint) > 0 {
+		log.Debug().Str("mount_point", mountPoint).Int("ref_count", s.getCurrentRefCount(mountPoint)).
 			Msg("Waiting for active operations to complete before resize")
-		// Brief sleep to avoid busy-waiting
-		time.Sleep(quiescenceCheckIntervalMS * time.Millisecond)
+		s.quiescenceCond.Wait()
 	}
 }
 

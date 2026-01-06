@@ -6,6 +6,7 @@
 - Always keep Swagger documentation up to date with any API changes.
 - Always add a new line to the end of each file you modify.
 - Always follow Effective Go guidelines for code style and conventions.
+- Always use stretchr suite when writing tests.
 - Do not create tests for cmd/ directory files.
 
 ## Project Commands
@@ -16,5 +17,6 @@
 
 ## Important Files
 - docs/PROJECT_NOTES.md - Contains project overview, goals, and current implementation status.
+- docs/LOOP_STORE_ARCHITECTURE.md - Contains detailed architecture of the loop store component.
 - README.md - Contains basic project information.
 - Makefile - Contains build, test, and lint commands.

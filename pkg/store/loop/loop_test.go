@@ -801,18 +801,18 @@ func TestMountCacheSchedulesIdleUnmount(t *testing.T) {
 
 	store.decrementRefCount(mountPoint)
 
-	store.refCountMutex.Lock()
+	store.timerMutex.Lock()
 	_, timerExists := store.mountTimers[mountPoint]
-	store.refCountMutex.Unlock()
+	store.timerMutex.Unlock()
 	if !timerExists {
 		t.Fatal("expected idle timer to be scheduled when refcount reached zero")
 	}
 
 	time.Sleep(5 * mountTTL)
 
-	store.refCountMutex.Lock()
+	store.timerMutex.Lock()
 	_, timerExists = store.mountTimers[mountPoint]
-	store.refCountMutex.Unlock()
+	store.timerMutex.Unlock()
 	if timerExists {
 		t.Fatal("expected idle timer to be cleared after unmount")
 	}

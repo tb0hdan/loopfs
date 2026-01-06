@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"loopfs/pkg/log"
@@ -68,17 +70,18 @@ type Store struct {
 	loopFileSize       int64
 	timeouts           TimeoutConfig
 	mountTTL           time.Duration
-	mountMutex         sync.Mutex
-	creationMutex      sync.Mutex
-	creationLocks      map[string]*sync.Mutex
-	refCountMutex      sync.Mutex
-	refCounts          map[string]int
+	syncOnWrite        bool // Whether to fsync after each file write for durability
+	mountLocks         sync.Map // map[string]*sync.Mutex - per-mount-point locks for concurrent mounts
+	creationLocks      sync.Map // map[string]*sync.Mutex - uses sync.Map for lock-free access
+	refCounts          sync.Map // map[string]*atomic.Int64 - atomic reference counts per mount point
+	timerMutex         sync.Mutex
 	mountTimers        map[string]*time.Timer
+	statusMutex        sync.Mutex
 	mountStatuses      map[string]*mountStatus
-	deduplicationMutex sync.Mutex
-	deduplicationLocks map[string]*sync.Mutex
-	resizeMutex        sync.Mutex
-	resizeLocks        map[string]*sync.RWMutex
+	quiescenceMutex    sync.Mutex
+	quiescenceCond     *sync.Cond // Condition variable for waiting on ref count reaching zero
+	deduplicationLocks sync.Map   // map[string]*sync.Mutex - uses sync.Map for lock-free access
+	resizeLocks        sync.Map   // map[string]*sync.RWMutex - uses sync.Map for lock-free access
 }
 
 type mountStatus struct {
@@ -88,35 +91,51 @@ type mountStatus struct {
 
 // New creates a new Loop store with the specified storage directory, loop file size, timeout configuration,
 // and mount cache TTL. The temp directory defaults to a "temp" subdirectory within the storage directory.
+// syncOnWrite defaults to true for maximum durability.
 func New(storageDir string, loopFileSize int64, timeouts TimeoutConfig, mountTTL time.Duration) *Store {
-	return NewWithTempDir(storageDir, filepath.Join(storageDir, "temp"), loopFileSize, timeouts, mountTTL)
+	return NewWithOptions(storageDir, filepath.Join(storageDir, "temp"), loopFileSize, timeouts, mountTTL, true)
 }
 
 // NewWithTempDir creates a new Loop store with an explicit temp directory for upload staging.
 // This allows avoiding temp directory space limitations by using storage directory space.
+// syncOnWrite defaults to true for maximum durability.
 func NewWithTempDir(storageDir, tempDir string, loopFileSize int64, timeouts TimeoutConfig, mountTTL time.Duration) *Store {
+	return NewWithOptions(storageDir, tempDir, loopFileSize, timeouts, mountTTL, true)
+}
+
+// NewWithOptions creates a new Loop store with all configuration options.
+// syncOnWrite controls whether to call fsync after each file write for durability.
+func NewWithOptions(storageDir, tempDir string, loopFileSize int64, timeouts TimeoutConfig, mountTTL time.Duration, syncOnWrite bool) *Store {
 	if mountTTL <= 0 {
 		mountTTL = defaultMountCacheTTL
 	}
 
-	return &Store{
-		storageDir:         storageDir,
-		tempDir:            tempDir,
-		loopFileSize:       loopFileSize,
-		timeouts:           timeouts,
-		mountTTL:           mountTTL,
-		creationLocks:      make(map[string]*sync.Mutex),
-		refCounts:          make(map[string]int),
-		mountTimers:        make(map[string]*time.Timer),
-		mountStatuses:      make(map[string]*mountStatus),
-		deduplicationLocks: make(map[string]*sync.Mutex),
-		resizeLocks:        make(map[string]*sync.RWMutex),
+	store := &Store{
+		storageDir:   storageDir,
+		tempDir:      tempDir,
+		loopFileSize: loopFileSize,
+		timeouts:     timeouts,
+		mountTTL:     mountTTL,
+		syncOnWrite:  syncOnWrite,
+		// creationLocks, deduplicationLocks, resizeLocks, mountLocks, and refCounts are sync.Map, no initialization needed
+		mountTimers:   make(map[string]*time.Timer),
+		mountStatuses: make(map[string]*mountStatus),
 	}
+	// Initialize quiescence condition variable with the mutex
+	store.quiescenceCond = sync.NewCond(&store.quiescenceMutex)
+	return store
 }
 
 // NewWithDefaults creates a new Loop store with default timeout configuration.
+// syncOnWrite defaults to true for maximum durability.
 func NewWithDefaults(storageDir string, loopFileSize int64) *Store {
 	return New(storageDir, loopFileSize, DefaultTimeoutConfig(), DefaultMountCacheTTL())
+}
+
+// SetSyncOnWrite enables or disables fsync after each file write.
+// This can be changed at runtime.
+func (s *Store) SetSyncOnWrite(enabled bool) {
+	s.syncOnWrite = enabled
 }
 
 // UnmountAll unmounts all currently mounted loop images.
@@ -216,80 +235,80 @@ func (s *Store) getFilePath(hash string) string {
 
 // getCreationMutex returns or creates a mutex for the given loop file path.
 // This ensures that only one goroutine can create a loop file at a time.
+// Uses sync.Map for lock-free concurrent access.
 func (s *Store) getCreationMutex(loopFilePath string) *sync.Mutex {
-	s.creationMutex.Lock()
-	defer s.creationMutex.Unlock()
-
-	if mutex, exists := s.creationLocks[loopFilePath]; exists {
-		return mutex
+	value, _ := s.creationLocks.LoadOrStore(loopFilePath, &sync.Mutex{})
+	result, ok := value.(*sync.Mutex)
+	if !ok {
+		// This should never happen as we control what's stored
+		result = &sync.Mutex{}
+		s.creationLocks.Store(loopFilePath, result)
 	}
-
-	mutex := &sync.Mutex{}
-	s.creationLocks[loopFilePath] = mutex
-	return mutex
+	return result
 }
 
-// cleanupCreationMutex removes the mutex for the given loop file path if no longer needed.
+// cleanupCreationMutex removes the mutex for the given loop file path.
 // This prevents memory leaks from the creationLocks map.
+// Safe to call even if another goroutine has a reference to the mutex.
 func (s *Store) cleanupCreationMutex(loopFilePath string) {
-	s.creationMutex.Lock()
-	defer s.creationMutex.Unlock()
-
-	// Check if loop file exists - if it does, we can safely remove the mutex
-	// since creation is complete and future operations will find the existing file
-	if _, err := os.Stat(loopFilePath); err == nil {
-		delete(s.creationLocks, loopFilePath)
-	}
+	s.creationLocks.Delete(loopFilePath)
 }
 
 // getDeduplicationMutex returns or creates a mutex for the given hash.
 // This ensures that only one goroutine can check and create a file for a specific hash at a time.
+// Uses sync.Map for lock-free concurrent access.
 func (s *Store) getDeduplicationMutex(hash string) *sync.Mutex {
-	s.deduplicationMutex.Lock()
-	defer s.deduplicationMutex.Unlock()
-
-	if mutex, exists := s.deduplicationLocks[hash]; exists {
-		return mutex
+	value, _ := s.deduplicationLocks.LoadOrStore(hash, &sync.Mutex{})
+	result, ok := value.(*sync.Mutex)
+	if !ok {
+		// This should never happen as we control what's stored
+		result = &sync.Mutex{}
+		s.deduplicationLocks.Store(hash, result)
 	}
-
-	mutex := &sync.Mutex{}
-	s.deduplicationLocks[hash] = mutex
-	return mutex
+	return result
 }
 
-// cleanupDeduplicationMutex removes the mutex for the given hash if no longer needed.
+// cleanupDeduplicationMutex removes the mutex for the given hash.
 // This prevents memory leaks from the deduplicationLocks map.
+// Safe to call even if another goroutine has a reference to the mutex.
 func (s *Store) cleanupDeduplicationMutex(hash string) {
-	s.deduplicationMutex.Lock()
-	defer s.deduplicationMutex.Unlock()
-
-	// Always clean up after upload completion (success or failure)
-	delete(s.deduplicationLocks, hash)
+	s.deduplicationLocks.Delete(hash)
 }
 
 // getResizeLock returns or creates a resize lock for the given loop file path.
 // This ensures that only one resize operation can occur per loop file at a time,
 // and coordinates with active file operations through reference counting.
+// Uses sync.Map for lock-free concurrent access.
 func (s *Store) getResizeLock(loopFilePath string) *sync.RWMutex {
-	s.resizeMutex.Lock()
-	defer s.resizeMutex.Unlock()
-
-	if lock, exists := s.resizeLocks[loopFilePath]; exists {
-		return lock
+	value, _ := s.resizeLocks.LoadOrStore(loopFilePath, &sync.RWMutex{})
+	rwLock, ok := value.(*sync.RWMutex)
+	if !ok {
+		// This should never happen as we control what's stored
+		rwLock = &sync.RWMutex{}
+		s.resizeLocks.Store(loopFilePath, rwLock)
 	}
-
-	lock := &sync.RWMutex{}
-	s.resizeLocks[loopFilePath] = lock
-	return lock
+	return rwLock
 }
 
-// cleanupResizeLock removes the resize lock for the given loop file path if no longer needed.
+// cleanupResizeLock removes the resize lock for the given loop file path.
 // This prevents memory leaks from the resizeLocks map.
+// Safe to call even if another goroutine has a reference to the lock.
 func (s *Store) cleanupResizeLock(loopFilePath string) {
-	s.resizeMutex.Lock()
-	defer s.resizeMutex.Unlock()
+	s.resizeLocks.Delete(loopFilePath)
+}
 
-	delete(s.resizeLocks, loopFilePath)
+// getMountLock returns or creates a mutex for the given mount point.
+// This allows mount/unmount operations on different mount points to proceed in parallel.
+// Uses sync.Map for lock-free concurrent access.
+func (s *Store) getMountLock(mountPoint string) *sync.Mutex {
+	value, _ := s.mountLocks.LoadOrStore(mountPoint, &sync.Mutex{})
+	mtxLock, ok := value.(*sync.Mutex)
+	if !ok {
+		// This should never happen as we control what's stored
+		mtxLock = &sync.Mutex{}
+		s.mountLocks.Store(mountPoint, mtxLock)
+	}
+	return mtxLock
 }
 
 func newMountStatus() *mountStatus {
@@ -298,8 +317,8 @@ func newMountStatus() *mountStatus {
 
 // signalMountReady notifies waiters that a mount attempt has completed.
 func (s *Store) signalMountReady(mountPoint string, mountErr error) {
-	s.refCountMutex.Lock()
-	defer s.refCountMutex.Unlock()
+	s.statusMutex.Lock()
+	defer s.statusMutex.Unlock()
 
 	status, exists := s.mountStatuses[mountPoint]
 	if !exists {
@@ -313,9 +332,9 @@ func (s *Store) signalMountReady(mountPoint string, mountErr error) {
 
 // waitForMountReady blocks until the in-progress mount for mountPoint completes.
 func (s *Store) waitForMountReady(mountPoint string) error {
-	s.refCountMutex.Lock()
+	s.statusMutex.Lock()
 	status := s.mountStatuses[mountPoint]
-	s.refCountMutex.Unlock()
+	s.statusMutex.Unlock()
 
 	if status == nil {
 		return nil
@@ -325,42 +344,71 @@ func (s *Store) waitForMountReady(mountPoint string) error {
 	return status.err
 }
 
+// getOrCreateRefCount returns or creates an atomic counter for the given mount point.
+// Uses LoadOrStore for efficient lock-free access.
+func (s *Store) getOrCreateRefCount(mountPoint string) *atomic.Int64 {
+	value, _ := s.refCounts.LoadOrStore(mountPoint, &atomic.Int64{})
+	counter, ok := value.(*atomic.Int64)
+	if !ok {
+		// This should never happen as we control what's stored
+		counter = &atomic.Int64{}
+		s.refCounts.Store(mountPoint, counter)
+	}
+	return counter
+}
+
 // incrementRefCount increments the reference count for a mount point.
 // Returns true if this is the first reference (mount needed), false otherwise.
+// Uses atomic operations for the counter to reduce lock contention.
 func (s *Store) incrementRefCount(mountPoint string) bool {
-	s.refCountMutex.Lock()
-	defer s.refCountMutex.Unlock()
+	// Stop any pending unmount timer first
+	s.stopMountTimer(mountPoint)
 
-	s.stopMountTimerLocked(mountPoint)
+	// Atomically increment the counter
+	counter := s.getOrCreateRefCount(mountPoint)
+	newCount := counter.Add(1)
 
-	s.refCounts[mountPoint]++
-	if s.refCounts[mountPoint] == 1 {
+	if newCount == 1 {
+		// First reference - create mount status
+		s.statusMutex.Lock()
 		s.mountStatuses[mountPoint] = newMountStatus()
+		s.statusMutex.Unlock()
 		return true
 	}
 	return false
 }
 
 // decrementRefCount decrements the reference count for a mount point.
-// Returns true if this was the last reference (unmount needed), false otherwise.
+// Uses atomic operations for the counter to reduce lock contention.
+// Broadcasts to quiescenceCond when ref count reaches zero to wake waiters.
 func (s *Store) decrementRefCount(mountPoint string) {
 	var unmountNow bool
 
-	s.refCountMutex.Lock()
-
-	if s.refCounts[mountPoint] > 0 {
-		s.refCounts[mountPoint]--
-		if s.refCounts[mountPoint] == 0 {
-			delete(s.refCounts, mountPoint)
-			if s.mountTTL <= 0 {
-				unmountNow = true
-			} else {
-				s.scheduleUnmountLocked(mountPoint)
-			}
-		}
+	// Load the counter - if it doesn't exist, nothing to decrement
+	value, exists := s.refCounts.Load(mountPoint)
+	if !exists {
+		return
 	}
 
-	s.refCountMutex.Unlock()
+	counter, ok := value.(*atomic.Int64)
+	if !ok {
+		return
+	}
+
+	newCount := counter.Add(-1)
+	if newCount == 0 {
+		// Last reference - clean up and schedule unmount
+		s.refCounts.Delete(mountPoint)
+
+		// Signal any waiters (e.g., resize operations) that ref count is zero
+		s.quiescenceCond.Broadcast()
+
+		if s.mountTTL <= 0 {
+			unmountNow = true
+		} else {
+			s.scheduleUnmount(mountPoint)
+		}
+	}
 
 	if unmountNow {
 		if err := s.unmountMountPoint(mountPoint); err != nil {
@@ -372,23 +420,40 @@ func (s *Store) decrementRefCount(mountPoint string) {
 // getCurrentRefCount returns the current reference count for a mount point.
 // Used internally for resize coordination.
 func (s *Store) getCurrentRefCount(mountPoint string) int {
-	s.refCountMutex.Lock()
-	defer s.refCountMutex.Unlock()
+	value, exists := s.refCounts.Load(mountPoint)
+	if !exists {
+		return 0
+	}
 
-	return s.refCounts[mountPoint]
+	counter, ok := value.(*atomic.Int64)
+	if !ok {
+		return 0
+	}
+
+	return int(counter.Load())
 }
 
-func (s *Store) stopMountTimerLocked(mountPoint string) {
+// stopMountTimer stops and removes the unmount timer for a mount point.
+// Protected by timerMutex.
+func (s *Store) stopMountTimer(mountPoint string) {
+	s.timerMutex.Lock()
+	defer s.timerMutex.Unlock()
+
 	if timer, exists := s.mountTimers[mountPoint]; exists {
 		timer.Stop()
 		delete(s.mountTimers, mountPoint)
 	}
 }
 
-func (s *Store) scheduleUnmountLocked(mountPoint string) {
+// scheduleUnmount schedules an unmount after the mount TTL expires.
+// Protected by timerMutex.
+func (s *Store) scheduleUnmount(mountPoint string) {
 	if s.mountTTL <= 0 {
 		return
 	}
+
+	s.timerMutex.Lock()
+	defer s.timerMutex.Unlock()
 
 	if timer, exists := s.mountTimers[mountPoint]; exists {
 		timer.Stop()
@@ -401,13 +466,15 @@ func (s *Store) scheduleUnmountLocked(mountPoint string) {
 }
 
 func (s *Store) handleMountTimeout(mountPoint string) {
-	s.refCountMutex.Lock()
-	if refCount := s.refCounts[mountPoint]; refCount > 0 {
-		s.refCountMutex.Unlock()
+	// Check ref count using atomic operations
+	if s.getCurrentRefCount(mountPoint) > 0 {
 		return
 	}
+
+	// Clean up timer entry
+	s.timerMutex.Lock()
 	delete(s.mountTimers, mountPoint)
-	s.refCountMutex.Unlock()
+	s.timerMutex.Unlock()
 
 	if err := s.unmountMountPoint(mountPoint); err != nil {
 		log.Error().Err(err).Str("mount_point", mountPoint).Msg("Failed to unmount idle loop file")
@@ -508,12 +575,15 @@ func (s *Store) createLoopFile(hash string) error {
 }
 
 // mountLoopFile mounts a loop file to its mount point.
+// Uses per-mount-point locking to allow parallel mounts to different mount points.
 func (s *Store) mountLoopFile(hash string) error {
-	s.mountMutex.Lock()
-	defer s.mountMutex.Unlock()
-
 	loopFilePath := s.getLoopFilePath(hash)
 	mountPoint := s.getMountPoint(hash)
+
+	// Use per-mount-point lock instead of global lock
+	mountLock := s.getMountLock(mountPoint)
+	mountLock.Lock()
+	defer mountLock.Unlock()
 
 	// Create mount point directory
 	if err := os.MkdirAll(mountPoint, dirPerm); err != nil {
@@ -547,9 +617,13 @@ func (s *Store) unmountLoopFile(hash string) error {
 	return s.unmountMountPoint(mountPoint)
 }
 
+// unmountMountPoint unmounts a specific mount point.
+// Uses per-mount-point locking to allow parallel unmounts to different mount points.
 func (s *Store) unmountMountPoint(mountPoint string) error {
-	s.mountMutex.Lock()
-	defer s.mountMutex.Unlock()
+	// Use per-mount-point lock instead of global lock
+	mountLock := s.getMountLock(mountPoint)
+	mountLock.Lock()
+	defer mountLock.Unlock()
 
 	// Check if mounted
 	if !s.isMounted(mountPoint) {
@@ -571,12 +645,26 @@ func (s *Store) unmountMountPoint(mountPoint string) error {
 	return nil
 }
 
-// isMounted checks if a mount point is currently mounted.
+// isMounted checks if a mount point is currently mounted using syscall.Statfs.
+// This is more efficient than forking a process to run the mountpoint command.
+// It compares filesystem IDs between the mount point and its parent directory -
+// if they differ, the mount point has a different filesystem mounted.
 func (s *Store) isMounted(mountPoint string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), s.timeouts.BaseCommandTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "mountpoint", "-q", mountPoint)
-	return cmd.Run() == nil
+	var stat1, stat2 syscall.Statfs_t
+
+	// Get filesystem ID of the mount point
+	if err := syscall.Statfs(mountPoint, &stat1); err != nil {
+		return false
+	}
+
+	// Get filesystem ID of the parent directory
+	parent := filepath.Dir(mountPoint)
+	if err := syscall.Statfs(parent, &stat2); err != nil {
+		return false
+	}
+
+	// If filesystem IDs differ, it's a mount point with something mounted
+	return stat1.Fsid != stat2.Fsid
 }
 
 // withMountedLoop executes a function with the loop file mounted, ensuring cleanup.
@@ -595,6 +683,9 @@ func (s *Store) withMountedLoop(hash string, callback func() error) error {
 	creationMutex := s.getCreationMutex(loopFilePath)
 	creationMutex.Lock()
 
+	// Ensure creation mutex is cleaned up on all paths (success or failure)
+	defer s.cleanupCreationMutex(loopFilePath)
+
 	// Check if loop file exists, create if not (synchronized)
 	if _, err := os.Stat(loopFilePath); os.IsNotExist(err) {
 		if err := s.createLoopFile(hash); err != nil {
@@ -607,9 +698,6 @@ func (s *Store) withMountedLoop(hash string, callback func() error) error {
 	}
 
 	creationMutex.Unlock()
-
-	// Clean up the creation mutex to prevent memory leaks
-	s.cleanupCreationMutex(loopFilePath)
 
 	// Increment reference count - mount only if this is the first reference
 	shouldMount := s.incrementRefCount(mountPoint)
@@ -647,6 +735,9 @@ func (s *Store) withMountedLoopUnlocked(hash string, callback func() error) erro
 	creationMutex := s.getCreationMutex(loopFilePath)
 	creationMutex.Lock()
 
+	// Ensure creation mutex is cleaned up on all paths (success or failure)
+	defer s.cleanupCreationMutex(loopFilePath)
+
 	// Double-check loop file still exists (in case it was deleted after initial check)
 	if _, err := os.Stat(loopFilePath); err != nil {
 		creationMutex.Unlock()
@@ -657,9 +748,6 @@ func (s *Store) withMountedLoopUnlocked(hash string, callback func() error) erro
 	}
 
 	creationMutex.Unlock()
-
-	// Clean up the creation mutex to prevent memory leaks
-	s.cleanupCreationMutex(loopFilePath)
 
 	// Increment reference count - mount only if this is the first reference
 	shouldMount := s.incrementRefCount(mountPoint)
@@ -686,28 +774,30 @@ func (s *Store) withMountedLoopUnlocked(hash string, callback func() error) erro
 
 // collectMountPoints gathers all mount points that need to be unmounted.
 func (s *Store) collectMountPoints() []string {
-	s.refCountMutex.Lock()
-	defer s.refCountMutex.Unlock()
-
 	// Use a map to avoid duplicates
 	mountPointMap := make(map[string]bool)
 
-	// Add mount points with non-zero reference counts
-	for mountPoint, refCount := range s.refCounts {
-		if refCount > 0 {
+	// Add mount points with non-zero reference counts from sync.Map
+	s.refCounts.Range(func(key, value interface{}) bool {
+		mountPoint, keyOK := key.(string)
+		counter, valOK := value.(*atomic.Int64)
+		if keyOK && valOK && counter.Load() > 0 {
 			mountPointMap[mountPoint] = true
 		}
-	}
+		// Clear the entry
+		s.refCounts.Delete(key)
+		return true
+	})
 
 	// Add mount points with scheduled unmount timers (idle mounts)
+	s.timerMutex.Lock()
 	for mountPoint, timer := range s.mountTimers {
 		mountPointMap[mountPoint] = true
 		timer.Stop()
 	}
-
-	// Clear all tracking maps
-	s.refCounts = make(map[string]int)
+	// Clear the timers map
 	s.mountTimers = make(map[string]*time.Timer)
+	s.timerMutex.Unlock()
 
 	// Convert map to slice
 	mountPoints := make([]string, 0, len(mountPointMap))
